@@ -12,7 +12,6 @@ SETTING_SYNC_INTERVAL = "sync-interval-minutes"
 MAIL_ACTIONS = (
     "toggle-read",
     "toggle-star",
-    "toggle-priority",
     "toggle-pin",
     "archive",
     "trash",

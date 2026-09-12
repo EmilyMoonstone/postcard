@@ -225,7 +225,7 @@ class InboxItemRow(Gtk.Box):
         account_color: int | None,
     ) -> None:
         self.conversation.bind(conversation, is_outgoing, account_label, account_color)
-        self._conversation_priority = conversation.is_priority
+        self._conversation_priority = conversation.is_starred
         self._show(self.conversation)
 
     def _show(self, shown: Gtk.Widget) -> None:

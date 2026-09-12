@@ -252,13 +252,6 @@ template $PostcardMainWindow: Adw.ApplicationWindow {
                       sensitive: false;
                     }
 
-                    Gtk.Button star_button {
-                      icon-name: "non-starred-symbolic";
-                      tooltip-text: _("Star");
-                      action-name: "win.toggle-star";
-                      sensitive: false;
-                    }
-
                     Gtk.Button pin_button {
                       icon-name: "view-pin-symbolic";
                       tooltip-text: _("Pin to Top");
@@ -269,7 +262,7 @@ template $PostcardMainWindow: Adw.ApplicationWindow {
                     Gtk.Button priority_button {
                       icon-name: "mail-mark-important-symbolic";
                       tooltip-text: _("Mark as Priority");
-                      action-name: "win.toggle-priority";
+                      action-name: "win.toggle-star";
                       sensitive: false;
                     }
 

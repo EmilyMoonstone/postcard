@@ -148,7 +148,7 @@ def seed_accounts(path: Path) -> None:
         db.save_raw_message(db.email_ids_for_server_ids(inbox.id, [uid])[0], INVITATION)
     db.reassign_conversations(inbox.id)
     db.reassign_conversations(graph_inbox.id)
-    db.set_priority(db.email_ids_for_server_ids(inbox.id, ["2"]), True)
+    db.set_email_starred(db.email_ids_for_server_ids(inbox.id, ["2"])[0], True)
     db.close()
 
 
@@ -242,7 +242,6 @@ def poke_accounts(app: PostcardApplication) -> list[Callable[[], object]]:
         lambda: app.settings.set_string("inbox-view", "date"),
         lambda: app.settings.set_string("inbox-view", "importance"),
         select_first,
-        lambda: window_of(app)._on_toggle_priority(None, None),
         lambda: window_of(app)._on_toggle_pin(None, None),
         lambda: window_of(app)._on_set_category(
             None, GLib.Variant.new_string("newsletter")

@@ -55,10 +55,6 @@ class ConversationRow(Gtk.Box):
         self._priority.add_css_class("priority-mark")
         top.append(self._priority)
 
-        self._star = Gtk.Image.new_from_icon_name("starred-symbolic")
-        self._star.set_pixel_size(12)
-        top.append(self._star)
-
         self._date_label = Gtk.Label(xalign=1)
         self._date_label.add_css_class("dim-label")
         top.append(self._date_label)
@@ -117,8 +113,7 @@ class ConversationRow(Gtk.Box):
         self._avatar.set_text(name)
         self._load_avatar(address)
         self._sender_label.set_label(participants)
-        self._star.set_visible(conversation.is_starred)
-        self._priority.set_visible(conversation.is_priority)
+        self._priority.set_visible(conversation.is_starred)
         self._pin.set_visible(conversation.is_pinned)
         self._date_label.set_label(mail_sync.format_date(conversation.date))
         self._subject_label.set_label(subject)
@@ -138,7 +133,7 @@ class ConversationRow(Gtk.Box):
         # selectors in style.css, which the is_ prefix does not apply to.
         for css_class, is_set in (
             ("unread", conversation.is_unread),
-            ("priority", conversation.is_priority),
+            ("priority", conversation.is_starred),
         ):
             if is_set:
                 self.add_css_class(css_class)

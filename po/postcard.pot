@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: postcard\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-13 01:29+0200\n"
+"POT-Creation-Date: 2026-09-13 01:37+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -309,7 +309,7 @@ msgid "Insert Link"
 msgstr ""
 
 #: src/postcard/composer_window.py:374 src/postcard/preferences_dialog.py:146
-#: src/postcard/window.py:2865 src/ui/account-dialog.blp:17
+#: src/postcard/window.py:2846 src/ui/account-dialog.blp:17
 #: src/ui/composer-window.blp:18
 msgid "Cancel"
 msgstr ""
@@ -326,9 +326,9 @@ msgstr ""
 msgid "Remove Attachment"
 msgstr ""
 
-#: src/postcard/composer_window.py:588 src/postcard/window.py:1070
-#: src/postcard/window.py:1537 src/postcard/window.py:2671
-#: src/postcard/window.py:2733 src/postcard/window.py:3192
+#: src/postcard/composer_window.py:588 src/postcard/window.py:1059
+#: src/postcard/window.py:1523 src/postcard/window.py:2652
+#: src/postcard/window.py:2714 src/postcard/window.py:3173
 msgid "Could not sign in to this account."
 msgstr ""
 
@@ -497,7 +497,7 @@ msgstr ""
 msgid "You're subscribed to this mailing list."
 msgstr ""
 
-#: src/postcard/message_view.py:321 src/postcard/window.py:2866
+#: src/postcard/message_view.py:321 src/postcard/window.py:2847
 msgid "Unsubscribe"
 msgstr ""
 
@@ -672,109 +672,100 @@ msgid_plural "Deleted {n} conversations"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:354 src/ui/main-window.blp:146
+#: src/postcard/window.py:353 src/ui/main-window.blp:146
 msgid "Inbox"
 msgstr ""
 
-#: src/postcard/window.py:355
-msgid "Starred"
-msgstr ""
-
-#: src/postcard/window.py:356
-msgid "Drafts"
-msgstr ""
-
-#: src/postcard/window.py:357
-msgid "Sent"
-msgstr ""
-
 #: src/postcard/window.py:358
-msgid "Trash"
-msgstr ""
-
-#: src/postcard/window.py:359 src/postcard/window.py:1214
-#: src/ui/main-window.blp:288 src/ui/main-window.blp:293
-msgid "Archive"
+msgid "Priority"
 msgstr ""
 
 #: src/postcard/window.py:360
+msgid "Drafts"
+msgstr ""
+
+#: src/postcard/window.py:361
+msgid "Sent"
+msgstr ""
+
+#: src/postcard/window.py:362
+msgid "Trash"
+msgstr ""
+
+#: src/postcard/window.py:363 src/postcard/window.py:1200
+#: src/ui/main-window.blp:281 src/ui/main-window.blp:286
+msgid "Archive"
+msgstr ""
+
+#: src/postcard/window.py:364
 msgid "Spam"
 msgstr ""
 
-#: src/postcard/window.py:890
+#: src/postcard/window.py:879
 #, python-brace-format
 msgid "Mail from {senders} now goes to {category}."
 msgstr ""
 
-#: src/postcard/window.py:1064
+#: src/postcard/window.py:1053
 msgid "You're offline. This will reach the server when you reconnect."
 msgstr ""
 
-#: src/postcard/window.py:1078
+#: src/postcard/window.py:1067
 #, python-brace-format
 msgid "Action failed: {msg}"
 msgstr ""
 
-#: src/postcard/window.py:1157 src/postcard/window.py:2543
+#: src/postcard/window.py:1145 src/postcard/window.py:2529
 #: src/ui/main-window.blp:250
 msgid "Mark Read"
 msgstr ""
 
-#: src/postcard/window.py:1159 src/postcard/window.py:2546
+#: src/postcard/window.py:1147 src/postcard/window.py:2532
 msgid "Mark Unread"
 msgstr ""
 
-#: src/postcard/window.py:1161 src/postcard/window.py:2550
-msgid "Unstar"
-msgstr ""
-
-#: src/postcard/window.py:1161 src/postcard/window.py:2553
-#: src/ui/main-window.blp:257
-msgid "Star"
-msgstr ""
-
-#: src/postcard/window.py:1163 src/postcard/window.py:2556
+#: src/postcard/window.py:1150 src/postcard/window.py:2537
 msgid "Remove Priority"
 msgstr ""
 
-#: src/postcard/window.py:1165 src/postcard/window.py:2559
-#: src/ui/main-window.blp:271
+#: src/postcard/window.py:1152 src/postcard/window.py:2540
+#: src/ui/main-window.blp:264
 msgid "Mark as Priority"
 msgstr ""
 
-#: src/postcard/window.py:1170 src/postcard/window.py:2563
+#: src/postcard/window.py:1157 src/postcard/window.py:2544
 msgid "Unpin"
 msgstr ""
 
-#: src/postcard/window.py:1170 src/postcard/window.py:2566
-#: src/ui/main-window.blp:264
+#: src/postcard/window.py:1157 src/postcard/window.py:2547
+#: src/ui/main-window.blp:257
 msgid "Pin to Top"
 msgstr ""
 
-#: src/postcard/window.py:1184
+#: src/postcard/window.py:1170
 msgid "Always Sort Sender As"
 msgstr ""
 
-#: src/postcard/window.py:1189 src/ui/main-window.blp:299
+#: src/postcard/window.py:1175 src/ui/main-window.blp:292
 msgid "Delete"
 msgstr ""
 
-#: src/postcard/window.py:1193
+#: src/postcard/window.py:1179
 msgid "Move to"
 msgstr ""
 
-#: src/postcard/window.py:1213
+#: src/postcard/window.py:1199
 msgid "Unarchive"
 msgstr ""
 
-#: src/postcard/window.py:1250
+#: src/postcard/window.py:1236
 #, python-brace-format
 msgid "Moved to {name}"
 msgid_plural "Moved {n} conversations to {name}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:1277
+#: src/postcard/window.py:1263
 #, python-brace-format
 msgid "No {role} folder for {account}."
 msgstr ""
@@ -782,124 +773,124 @@ msgstr ""
 #. High priority: a normal toast queues behind whatever is on screen (a
 #. "no such folder" warning, say), and its 5s wait is the whole undo
 #. window -- Undo would appear only once the move had already gone out.
-#: src/postcard/window.py:1377
+#: src/postcard/window.py:1363
 msgid "Undo"
 msgstr ""
 
-#: src/postcard/window.py:1526 src/postcard/window.py:1545
+#: src/postcard/window.py:1512 src/postcard/window.py:1531
 #, python-brace-format
 msgid "Move failed: {msg}"
 msgstr ""
 
-#: src/postcard/window.py:1694
+#: src/postcard/window.py:1680
 msgid "More"
 msgstr ""
 
-#: src/postcard/window.py:2072 src/ui/main-window.blp:60
+#: src/postcard/window.py:2058 src/ui/main-window.blp:60
 msgid "Folders"
 msgstr ""
 
-#: src/postcard/window.py:2207 src/ui/main-window.blp:391
+#: src/postcard/window.py:2193 src/ui/main-window.blp:384
 msgid "By Importance"
 msgstr ""
 
-#: src/postcard/window.py:2208 src/ui/main-window.blp:397
+#: src/postcard/window.py:2194 src/ui/main-window.blp:390
 msgid "By Category"
 msgstr ""
 
-#: src/postcard/window.py:2209 src/ui/main-window.blp:403
+#: src/postcard/window.py:2195 src/ui/main-window.blp:396
 msgid "By Date"
 msgstr ""
 
 #. No UID and no cached copy: nothing to fetch until the next sync.
-#: src/postcard/window.py:2636
+#: src/postcard/window.py:2617
 msgid "This message hasn't finished syncing yet."
 msgstr ""
 
-#: src/postcard/window.py:2641
+#: src/postcard/window.py:2622
 msgid "This message's mailbox is no longer available."
 msgstr ""
 
-#: src/postcard/window.py:2700
+#: src/postcard/window.py:2681
 msgid "This invitation can't be answered."
 msgstr ""
 
-#: src/postcard/window.py:2759
+#: src/postcard/window.py:2740
 #, python-brace-format
 msgid "Couldn't answer the invitation: {msg}"
 msgstr ""
 
-#: src/postcard/window.py:2800
+#: src/postcard/window.py:2781
 #, python-brace-format
 msgid "Couldn't save {name}: {msg}"
 msgstr ""
 
-#: src/postcard/window.py:2806
+#: src/postcard/window.py:2787
 #, python-brace-format
 msgid "Saved {name}."
 msgstr ""
 
-#: src/postcard/window.py:2821 src/postcard/window.py:2842
+#: src/postcard/window.py:2802 src/postcard/window.py:2823
 #, python-brace-format
 msgid "Couldn't open {name}."
 msgstr ""
 
-#: src/postcard/window.py:2860
+#: src/postcard/window.py:2841
 msgid "Unsubscribe from this list?"
 msgstr ""
 
-#: src/postcard/window.py:2861
+#: src/postcard/window.py:2842
 #, python-brace-format
 msgid "A request will be sent to {destination}."
 msgstr ""
 
-#: src/postcard/window.py:2905
+#: src/postcard/window.py:2886
 msgid "Couldn't unsubscribe. The list didn't accept the request."
 msgstr ""
 
-#: src/postcard/window.py:2908
+#: src/postcard/window.py:2889
 msgid "Unsubscribed. It can take a few days to take effect."
 msgstr ""
 
-#: src/postcard/window.py:3020
+#: src/postcard/window.py:3001
 #, python-brace-format
 msgid "Sent {n} queued message(s)."
 msgstr ""
 
-#: src/postcard/window.py:3031
+#: src/postcard/window.py:3012
 #, python-brace-format
 msgid "Couldn't send a queued message. {reason}"
 msgid_plural "Couldn't send {n} queued messages. {reason}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:3366
+#: src/postcard/window.py:3347
 #, python-brace-format
 msgid "{n} new message"
 msgid_plural "{n} new messages"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:3391
+#: src/postcard/window.py:3372
 #, python-brace-format
 msgid "{n} new messages"
 msgstr ""
 
 #. Auth failures aren't worth a Retry button (same password); everything
 #. else is a transient connection problem the user can retry.
-#: src/postcard/window.py:3414
+#: src/postcard/window.py:3395
 msgid "Retry"
 msgstr ""
 
-#: src/postcard/window.py:3423
+#: src/postcard/window.py:3404
 msgid "You're offline. Postcard will reconnect when your connection returns."
 msgstr ""
 
-#: src/postcard/window.py:3462
+#: src/postcard/window.py:3443
 msgid "Postcard is running in the background"
 msgstr ""
 
-#: src/postcard/window.py:3463
+#: src/postcard/window.py:3444
 msgid "It will keep checking for new mail. Quit to stop."
 msgstr ""
 
@@ -1081,7 +1072,7 @@ msgstr ""
 msgid "Back to Inbox"
 msgstr ""
 
-#: src/ui/main-window.blp:141 src/ui/main-window.blp:388
+#: src/ui/main-window.blp:141 src/ui/main-window.blp:381
 msgid "Inbox View"
 msgstr ""
 
@@ -1125,47 +1116,47 @@ msgstr ""
 msgid "Forward"
 msgstr ""
 
-#: src/ui/main-window.blp:278
+#: src/ui/main-window.blp:271
 msgid "Move to Folder"
 msgstr ""
 
-#: src/ui/main-window.blp:309
+#: src/ui/main-window.blp:302
 msgid "Select a Conversation"
 msgstr ""
 
-#: src/ui/main-window.blp:310
+#: src/ui/main-window.blp:303
 msgid "Pick a message from the list to read it here."
 msgstr ""
 
-#: src/ui/main-window.blp:317
+#: src/ui/main-window.blp:310
 msgid "Loading Message…"
 msgstr ""
 
-#: src/ui/main-window.blp:413
+#: src/ui/main-window.blp:406
 msgid "_Add Account"
 msgstr ""
 
-#: src/ui/main-window.blp:417
+#: src/ui/main-window.blp:410
 msgid "_Online Accounts"
 msgstr ""
 
-#: src/ui/main-window.blp:421
+#: src/ui/main-window.blp:414
 msgid "_Manage Accounts"
 msgstr ""
 
-#: src/ui/main-window.blp:428
+#: src/ui/main-window.blp:421
 msgid "_Preferences"
 msgstr ""
 
-#: src/ui/main-window.blp:432
+#: src/ui/main-window.blp:425
 msgid "_Keyboard Shortcuts"
 msgstr ""
 
-#: src/ui/main-window.blp:436
+#: src/ui/main-window.blp:429
 msgid "_About Postcard"
 msgstr ""
 
-#: src/ui/main-window.blp:443
+#: src/ui/main-window.blp:436
 msgid "_Quit"
 msgstr ""
 
@@ -1339,7 +1330,7 @@ msgstr ""
 
 #: src/ui/shortcuts-dialog.blp:66
 msgctxt "shortcut window"
-msgid "Star"
+msgid "Mark as Priority"
 msgstr ""
 
 #: src/ui/shortcuts-dialog.blp:71

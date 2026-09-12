@@ -154,7 +154,7 @@ def bundle_key(
     choosing to see the account as one row means. A pinned or priority thread
     never folds away: the user marked it to be seen.
     """
-    if conversation.is_pinned or conversation.is_priority:
+    if conversation.is_pinned or conversation.is_starred:
         return None
     account_id = account_of(conversation)
     if account_id is not None and account_id in bundled_accounts:

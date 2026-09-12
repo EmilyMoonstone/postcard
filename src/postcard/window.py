@@ -147,7 +147,6 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     reply_button: Gtk.Button = Gtk.Template.Child()
     forward_button: Gtk.Button = Gtk.Template.Child()
     mark_read_button: Gtk.Button = Gtk.Template.Child()
-    star_button: Gtk.Button = Gtk.Template.Child()
     archive_button: Gtk.Button = Gtk.Template.Child()
     archive_button_content: Adw.ButtonContent = Gtk.Template.Child()
     move_button: Gtk.MenuButton = Gtk.Template.Child()
@@ -352,7 +351,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             )
             for group_id, role, icon, label in (
                 (ALL_INBOXES_ID, "inbox", "mail-unread-symbolic", _("Inbox")),
-                (STARRED_ID, "starred", "starred-symbolic", _("Starred")),
+                (
+                    STARRED_ID,
+                    "starred",
+                    "mail-mark-important-symbolic",
+                    _("Priority"),
+                ),
                 (ALL_DRAFTS_ID, "drafts", "document-edit-symbolic", _("Drafts")),
                 (ALL_SENT_ID, "sent", "mail-send-symbolic", _("Sent")),
                 (ALL_TRASH_ID, "trash", "user-trash-symbolic", _("Trash")),
@@ -727,7 +731,6 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
-            ("toggle-priority", self._on_toggle_priority),
             ("toggle-pin", self._on_toggle_pin),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
@@ -753,8 +756,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         if app is not None:
             for name, accels in (
                 ("win.toggle-read", ["<ctrl>i"]),
-                ("win.toggle-star", ["<ctrl>s"]),
-                ("win.toggle-priority", ["<ctrl>p"]),
+                ("win.toggle-star", ["<ctrl>s", "<ctrl>p"]),
                 ("win.toggle-pin", ["<ctrl><shift>p"]),
                 ("win.archive", ["<ctrl>e"]),
                 ("win.trash", ["<ctrl>Delete"]),
@@ -846,19 +848,6 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 self._db.set_email_starred,
                 imap_session.FLAG_FLAGGED,
             )
-
-    # Priority is the user's alone: never inferred, and kept on this machine,
-    # since no mail server has a flag that means it.
-    def _on_toggle_priority(self, _action: Gio.SimpleAction, _param: object) -> None:
-        conversations = self._selected_conversations()
-        if not conversations:
-            return
-        is_priority = not all(item.is_priority for item in conversations)
-        mails = [mail for conversation in conversations for mail in conversation.emails]
-        self._db.set_priority([mail.id for mail in mails], is_priority)
-        for mail in mails:
-            mail.is_priority = is_priority
-        self._after_flag_change(conversations)
 
     # A pin keeps a thread at the top of the inbox; like priority it is the
     # user's alone and stays on this machine.
@@ -1137,7 +1126,6 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
-            ("toggle-priority", self._on_toggle_priority),
             ("toggle-pin", self._on_toggle_pin),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
@@ -1158,18 +1146,16 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             if any(item.is_unread for item in selected)
             else _("Mark Unread")
         )
-        star = _("Unstar") if any(item.is_starred for item in selected) else _("Star")
         priority = (
             _("Remove Priority")
-            if all(item.is_priority for item in selected)
+            if any(item.is_starred for item in selected)
             else _("Mark as Priority")
         )
         flags.append(read, "context.toggle-read")
-        flags.append(star, "context.toggle-star")
+        flags.append(priority, "context.toggle-star")
         pin = (
             _("Unpin") if all(item.is_pinned for item in selected) else _("Pin to Top")
         )
-        flags.append(priority, "context.toggle-priority")
         flags.append(pin, "context.toggle-pin")
         menu.append_section(None, flags)
 
@@ -1604,7 +1590,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     def _group_members(self, group: Folder) -> list[Folder]:
         """Every account's folder of a group's role, in account order.
 
-        Starred gathers messages, not folders, so it has none. A role folder
+        Priority gathers flagged messages, not folders, so it has none. A role folder
         nested inside another of the same role shows under its parent instead.
         """
         if group.id == STARRED_ID:
@@ -2116,7 +2102,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         """The conversations on screen, narrowed by the search box and filter."""
         query = self.search_entry.get_text().strip()
         if self._is_starred_view():
-            # Starred mail lives in any folder of any account.
+            # Priority (flagged) mail lives in any folder of any account.
             every_folder = list(self._folders_by_id)
             matches = [
                 conversation
@@ -2545,14 +2531,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self.mark_read_button.set_icon_name("mail-unread-symbolic")
             self.mark_read_button.set_tooltip_text(_("Mark Unread"))
 
+        # Priority is the server's flag, so a mixed selection reads as flagged
+        # the same way toggling does: any flagged thread means "remove".
         if any(conversation.is_starred for conversation in selected):
-            self.star_button.set_icon_name("starred-symbolic")
-            self.star_button.set_tooltip_text(_("Unstar"))
-        else:
-            self.star_button.set_icon_name("non-starred-symbolic")
-            self.star_button.set_tooltip_text(_("Star"))
-
-        if all(conversation.is_priority for conversation in selected):
             self.priority_button.set_tooltip_text(_("Remove Priority"))
             self.priority_button.add_css_class("accent")
         else:

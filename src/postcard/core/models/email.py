@@ -28,7 +28,6 @@ class Email(GObject.Object):
         recipient: str = "",
         recipient_address: str = "",
         category: str = "",
-        is_priority: bool = False,
         is_pinned: bool = False,
     ) -> None:
         super().__init__()
@@ -50,7 +49,5 @@ class Email(GObject.Object):
         self.conversation_id: int | None = conversation_id
         # A core.categories value, "" for mail stored before sorting existed.
         self.category: str = category
-        # Set by the user, never inferred; kept on this machine only.
-        self.is_priority: bool = is_priority
         # Also the user's alone and local: keeps the thread at the top.
         self.is_pinned: bool = is_pinned

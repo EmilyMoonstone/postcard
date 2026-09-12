@@ -66,7 +66,7 @@ def test_importance_folds_categories_into_bundles_and_leaves_priority_in_place()
     rows = build(
         [
             thread("2026-09-12", category="newsletter"),
-            thread("2026-09-10", is_priority=True, category="newsletter"),
+            thread("2026-09-10", is_starred=True, category="newsletter"),
             thread("2026-09-12"),
             thread("2026-09-11", category="newsletter"),
             thread("2026-09-11", category="notification"),
@@ -106,7 +106,7 @@ def test_a_bundled_account_takes_all_its_mail_whatever_the_category():
             thread("2026-09-12", account=2),
             thread("2026-09-12", account=2, category="newsletter"),
             thread("2026-09-12", account=1, category="newsletter"),
-            thread("2026-09-12", account=2, is_priority=True),
+            thread("2026-09-12", account=2, is_starred=True),
         ],
         VIEW_IMPORTANCE,
         account_of,
@@ -150,7 +150,7 @@ def test_the_category_view_lists_every_thread_under_its_category():
 def test_the_date_view_has_no_bundles():
     rows = build(
         [
-            thread("2026-09-11", category="newsletter", is_priority=True),
+            thread("2026-09-11", category="newsletter", is_starred=True),
             thread("2026-09-12", category="newsletter"),
         ],
         VIEW_DATE,
@@ -172,7 +172,7 @@ def test_an_opened_bundle_lists_its_threads_by_date():
         thread("2026-09-01", category="newsletter"),
         thread("2026-09-12", category="newsletter"),
         thread("2026-09-12"),
-        thread("2026-09-11", category="newsletter", is_priority=True),
+        thread("2026-09-11", category="newsletter", is_starred=True),
     ]
 
     rows = open_bundle(conversations, "category:newsletter", account_of, set(), TODAY)
