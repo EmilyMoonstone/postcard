@@ -13,6 +13,7 @@ from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from functools import lru_cache
 from gettext import gettext as _
 
+from .core.categories import categorize
 from .core.models.account import Account
 from .core.models.email import Email
 from .core.models.folder import Folder, FolderRole
@@ -400,6 +401,11 @@ def _to_message_header(fetched: FetchedHeader) -> MessageHeader:
         is_unread=not fetched.seen,
         is_starred=fetched.flagged,
         preview=fetched.preview,
+        category=categorize(
+            dict(fetched.signals),
+            _sender_address(fetched.from_header),
+            is_invitation=fetched.is_invitation,
+        ),
         message_id=fetched.message_id,
         in_reply_to=fetched.in_reply_to,
         references=fetched.references,

@@ -23,5 +23,6 @@ class MessageHeader:
     message_id: str = ""
     in_reply_to: str = ""
     references: str = ""
+    category: str = ""  # a core.categories value; "" when not yet sorted
     # every (name, address) pair on the message, for the contacts list
     addresses: list[tuple[str, str]] = field(default_factory=list)

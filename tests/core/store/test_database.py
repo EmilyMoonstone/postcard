@@ -793,3 +793,50 @@ def test_removing_an_account_drops_its_queued_actions(db, folder):
     db.delete_account(folder.account_id)
 
     assert db.pending_actions(folder.account_id) == []
+
+
+# --- smart inbox ----------------------------------------------------------------
+
+
+def test_a_message_keeps_the_category_the_sync_gave_it(db, folder):
+    incoming(
+        db, folder.id, "1", sender_address="news@shop.example", category="newsletter"
+    )
+
+    [stored] = db.emails_in_folder(folder.id)
+    assert stored.category == "newsletter"
+
+
+def test_a_sender_rule_wins_now_and_for_mail_still_to_come(db, folder):
+    incoming(db, folder.id, "1", sender_address="ada@example.com", category="people")
+
+    db.set_sender_category("Ada@Example.com", "notification")
+    incoming(db, folder.id, "2", sender_address="ada@example.com", category="people")
+
+    assert {mail.category for mail in db.emails_in_folder(folder.id)} == {
+        "notification"
+    }
+
+
+def test_a_row_stored_before_sorting_gets_sorted_on_the_next_sync(db, folder):
+    incoming(db, folder.id, "1", category="")
+    incoming(db, folder.id, "1", category="newsletter")
+    incoming(db, folder.id, "1", category="people")
+
+    assert db.emails_in_folder(folder.id)[0].category == "newsletter"
+
+
+def test_priority_is_set_and_cleared_per_email(db, folder):
+    incoming(db, folder.id, "1")
+    [mail] = db.emails_in_folder(folder.id)
+
+    db.set_priority([mail.id], True)
+    assert db.emails_in_folder(folder.id)[0].is_priority is True
+    db.set_priority([mail.id], False)
+    assert db.emails_in_folder(folder.id)[0].is_priority is False
+
+
+def test_an_account_can_be_bundled(db, folder):
+    db.set_account_bundled(folder.account_id, True)
+
+    assert db.accounts()[0].is_bundled is True

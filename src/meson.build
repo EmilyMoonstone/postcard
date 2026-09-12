@@ -57,6 +57,7 @@ postcard_core_sources = [
   'postcard/core/secrets.py',
   'postcard/core/goa.py',
   'postcard/core/autostart.py',
+  'postcard/core/categories.py',
   'postcard/core/avatars.py',
   'postcard/core/compose.py',
   'postcard/core/providers.py',

@@ -1263,3 +1263,18 @@ def test_a_graph_account_answers_through_the_calendar(graph):
     )
 
     assert graph.calls == [("event", "m1", "DECLINED")]
+
+
+def test_imap_headers_are_sorted_into_a_category():
+    header = _to_message_header(
+        fetched(from_header="GitHub <notifications@github.com>", signals=())
+    )
+    assert header.category == "notification"
+
+    listed = _to_message_header(
+        fetched(
+            from_header="Shop <hello@shop.example>",
+            signals=(("list-unsubscribe", "<https://x>"),),
+        )
+    )
+    assert listed.category == "newsletter"
