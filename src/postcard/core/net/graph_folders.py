@@ -58,6 +58,12 @@ def well_known_ids(session: GraphSession) -> dict[str, str]:
     }
 
 
+def inbox_counts(session: GraphSession) -> tuple[int, int]:
+    """The inbox's (total, unread) counts: the cheapest sign that mail arrived."""
+    inbox = session.get("/me/mailFolders/inbox?$select=totalItemCount,unreadItemCount")
+    return int(inbox.get("totalItemCount") or 0), int(inbox.get("unreadItemCount") or 0)
+
+
 def list_folders(
     session: GraphSession, well_known: dict[str, str]
 ) -> list[GraphFolder]:

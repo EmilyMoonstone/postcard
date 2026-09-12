@@ -3,6 +3,8 @@ import email
 import imaplib
 import logging
 import re
+import select
+import socket
 from email import policy
 from typing import NamedTuple
 
@@ -53,6 +55,17 @@ def special_use_role(flags: str) -> str:
         if role is not None:
             return role
     return ""
+
+
+# Advertised by servers that can push changes to an open mailbox (RFC 2177).
+IDLE_CAPABILITY = "IDLE"
+
+# The tag of the one command imaplib doesn't know how to send for us.
+_IDLE_TAG = b"PCIDLE"
+
+# Untagged replies that mean the selected mailbox changed. RECENT is left
+# out: a server sends it beside EXISTS, never alone.
+_MAILBOX_CHANGE = re.compile(rb"^\* \d+ (EXISTS|EXPUNGE|FETCH)\b", re.IGNORECASE)
 
 
 # Gmail files its own copy of everything sent through it. This capability is how
@@ -226,6 +239,46 @@ class ImapSession:
             raise ImapError(f"not connected to {self._host}:{self._port}")
         return self._imap
 
+    def wait_for_change(self, seconds: float, wakeup: socket.socket) -> bool:
+        """Wait in IDLE until the selected mailbox changes; True if it did.
+
+        Returns False once `seconds` pass, or as soon as anything is written
+        to `wakeup` -- which is how another thread stops the wait without
+        touching this connection. imaplib has no IDLE before Python 3.14, so
+        the command is spoken by hand; select() on the socket rather than a
+        socket timeout, because a timed-out read leaves imaplib's buffered
+        reader unusable. A reply the reader had already buffered is only seen
+        at DONE, so a change can be reported up to `seconds` late -- in
+        practice servers send the continuation on its own.
+        """
+        imap = self._require_imap()
+        imap.send(_IDLE_TAG + b" IDLE\r\n")
+        continuation = imap.readline()
+        if not continuation.startswith(b"+"):
+            raise ImapError(f"IDLE refused: {continuation!r}")
+
+        is_changed = False
+        connection = imap.socket()
+        pending = getattr(connection, "pending", lambda: 0)
+        while not is_changed:
+            if not pending():
+                readable, _, _ = select.select([connection, wakeup], [], [], seconds)
+                if connection not in readable:
+                    break
+            line = imap.readline()
+            if not line:
+                raise ImapError(f"{self._host} closed the connection during IDLE")
+            is_changed = bool(_MAILBOX_CHANGE.match(line))
+
+        imap.send(b"DONE\r\n")
+        while True:
+            line = imap.readline()
+            if not line:
+                raise ImapError(f"{self._host} closed the connection ending IDLE")
+            if line.startswith(_IDLE_TAG):
+                return is_changed or bool(_MAILBOX_CHANGE.match(line))
+            is_changed = is_changed or bool(_MAILBOX_CHANGE.match(line))
+
     def list_folders(self) -> list[MailboxInfo]:
         """Return every listed mailbox.
 
@@ -293,6 +346,16 @@ class ImapSession:
         if match is None:
             raise ImapError(f"no UNSEEN in the status of {mailbox}: {payload}")
         return int(match.group(1))
+
+    def refresh_capabilities(self) -> None:
+        """Ask again after signing in: a server may only offer some then, and
+        imaplib keeps what it heard in the greeting."""
+        imap = self._require_imap()
+        status, payload = imap.capability()
+        if status == STATUS_OK and payload and isinstance(payload[0], bytes):
+            imap.capabilities = tuple(
+                payload[0].decode("ascii", "replace").upper().split()
+            )
 
     def has_capability(self, name: str) -> bool:
         """Whether the server advertises a capability. imaplib upper-cases the

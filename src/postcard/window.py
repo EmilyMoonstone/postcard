@@ -33,6 +33,7 @@ from .core.models.pending_action import ACTION_FLAG, ACTION_MOVE, PendingAction
 from .core.net import errors, imap_session
 from .core.store.database import Database
 from .folder_row import FolderRow
+from .mail_watch import MailWatcher
 from .message_view import LoadCallback, MessageView
 from .online_accounts_dialog import PostcardOnlineAccountsDialog
 from .window_types import (
@@ -229,6 +230,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # toggle a flag back or move a message on from where it landed.
         self._replaying_account_ids: set[int] = set()
         self._sync_timer_id = 0
+        # Push for new mail between ticks. Started by _watch_accounts once
+        # there are accounts and the network, and only while syncing is on.
+        self._watcher = MailWatcher(self._on_mail_arrived)
         self._interval_handler = self._settings.connect(
             f"changed::{SETTING_SYNC_INTERVAL}", lambda *_: self._reschedule_sync()
         )
@@ -444,6 +448,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             # Keep the app alive so the sync timer keeps running.
             return True
 
+        self._watcher.stop_all()
         self._network.disconnect(self._network_handler)
         self._settings.disconnect(self._interval_handler)
         self._settings.disconnect(self._avatar_handler)
@@ -503,11 +508,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._current_folder = None
             self.main_stack.set_visible_child_name(PAGE_NO_ACCOUNT)
             self._push_tray_unread([])
+            self._watcher.stop_all()
             return
         if self._account is None:
             self._load_mail_view()
             return
         self._reload_folders()
+        self._watch_accounts()
 
     def _on_add_account_clicked(self, *_args: object) -> None:
         dialog = PostcardAccountDialog(self._db)
@@ -528,6 +535,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._reload_folders()
         # Highest id sorts last, so this is the one just added.
         self._start_sync(self._db.accounts()[-1], in_background=True)
+        self._watch_accounts()
 
     def _signature_text(self) -> str:
         if not self._settings.get_boolean("signature-enabled"):
@@ -2578,6 +2586,25 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._sync_timer_id = GLib.timeout_add_seconds(
                 minutes * SECONDS_PER_MINUTE, self._on_sync_tick
             )
+        self._watch_accounts()
+
+    def _watch_accounts(self) -> None:
+        """Keep push running for exactly the accounts that should have it.
+
+        Manual-only sync (an interval of 0) means the user wants no background
+        traffic, and an IDLE connection is exactly that.
+        """
+        is_wanted = (
+            self._is_online and self._settings.get_int(SETTING_SYNC_INTERVAL) > 0
+        )
+        self._watcher.watch(list(self._accounts.values()) if is_wanted else [])
+
+    def _on_mail_arrived(self, account_id: int) -> bool:
+        account = self._accounts.get(account_id)
+        if account is not None and self._is_online:
+            # The inbox, like a tick: its sync also refreshes every badge.
+            self._start_sync(account, in_background=True)
+        return False
 
     def _on_sync_tick(self) -> bool:
         if self._accounts and self._is_online:
@@ -2849,11 +2876,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             # The pooled connections are on sockets that are already gone, but
             # nothing says so until a command times out on one.
             mail_sync.close_sessions()
+            self._watch_accounts()
             self._show_offline_banner()
             return
         self.connection_banner.set_revealed(False)
         if self._accounts:
             self._sync_all()
+        self._watch_accounts()
 
     def _notify_background(self) -> None:
         # Once per install, not once per close: the notice explains why the app

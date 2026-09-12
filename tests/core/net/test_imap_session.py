@@ -1,5 +1,8 @@
 import imaplib
+import socket
 import ssl
+import threading
+import time
 
 import pytest
 
@@ -429,3 +432,79 @@ def test_fetching_no_uids_asks_nothing(monkeypatch):
     imap = FakeImap()
     assert connect(monkeypatch, imap).fetch_headers_by_uid([]) == []
     assert imap.calls == []
+
+
+# --- IDLE -----------------------------------------------------------------------
+
+
+class SocketImap:
+    """imaplib's send/readline/socket over a real socket, so select() works."""
+
+    def __init__(self, client: socket.socket) -> None:
+        self._client = client
+        self._file = client.makefile("rb")
+        self.sent: list[bytes] = []
+        self.welcome = b"* OK"
+
+    def send(self, data):
+        self.sent.append(data)
+
+    def readline(self):
+        return self._file.readline()
+
+    def socket(self):
+        return self._client
+
+
+@pytest.fixture
+def idle_link(monkeypatch):
+    client, server = socket.socketpair()
+    wakeup, waker = socket.socketpair()
+    imap = SocketImap(client)
+    session = connect(monkeypatch, imap)  # type: ignore[arg-type]
+    yield session, imap, server, wakeup, waker
+    for end in (client, server, wakeup, waker):
+        end.close()
+
+
+def test_idle_reports_a_change_the_server_pushes(idle_link):
+    session, imap, server, wakeup, _waker = idle_link
+    server.sendall(b"+ idling\r\n")
+    result = []
+    waiter = threading.Thread(
+        target=lambda: result.append(session.wait_for_change(30, wakeup))
+    )
+    waiter.start()
+    time.sleep(0.1)
+    server.sendall(b"* OK still here\r\n")
+    time.sleep(0.05)
+    server.sendall(b"* 12 EXISTS\r\nPCIDLE OK IDLE terminated\r\n")
+    waiter.join(5)
+
+    assert result == [True]
+    assert imap.sent == [b"PCIDLE IDLE\r\n", b"DONE\r\n"]
+
+
+def test_idle_ends_quietly_when_nothing_changes(idle_link):
+    session, _imap, server, wakeup, _waker = idle_link
+    server.sendall(b"+ idling\r\nPCIDLE OK IDLE terminated\r\n")
+
+    assert session.wait_for_change(0.1, wakeup) is False
+
+
+def test_a_wakeup_stops_the_wait_at_once(idle_link):
+    session, _imap, server, wakeup, waker = idle_link
+    server.sendall(b"+ idling\r\nPCIDLE OK IDLE terminated\r\n")
+    waker.sendall(b"x")
+
+    started = time.monotonic()
+    assert session.wait_for_change(30, wakeup) is False
+    assert time.monotonic() - started < 5
+
+
+def test_a_refused_idle_is_an_error(idle_link):
+    session, _imap, server, wakeup, _waker = idle_link
+    server.sendall(b"PCIDLE BAD unknown command\r\n")
+
+    with pytest.raises(ImapError, match="IDLE refused"):
+        session.wait_for_change(1, wakeup)
