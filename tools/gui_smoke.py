@@ -22,6 +22,9 @@ from pathlib import Path
 _DATA_HOME = tempfile.mkdtemp(prefix="postcard-smoke-")
 os.environ["XDG_DATA_HOME"] = _DATA_HOME
 os.environ["GSETTINGS_BACKEND"] = "memory"
+# A GTK critical is a bug waiting to crash -- a dangling widget reference once
+# only showed as criticals until a later redraw segfaulted. Make them fatal.
+os.environ["G_DEBUG"] = "fatal-criticals"
 
 failures: list[str] = []
 
@@ -240,6 +243,7 @@ def poke_accounts(app: PostcardApplication) -> list[Callable[[], object]]:
         lambda: app.settings.set_string("inbox-view", "importance"),
         select_first,
         lambda: window_of(app)._on_toggle_priority(None, None),
+        lambda: window_of(app)._on_toggle_pin(None, None),
         lambda: window_of(app)._on_set_category(
             None, GLib.Variant.new_string("newsletter")
         ),

@@ -47,6 +47,10 @@ class Conversation(GObject.Object):
         return any(mail.is_priority for mail in self.emails)
 
     @property
+    def is_pinned(self) -> bool:
+        return any(mail.is_pinned for mail in self.emails)
+
+    @property
     def category(self) -> str:
         """The latest message's: a thread is a newsletter if its newest mail is."""
         return self.latest.category

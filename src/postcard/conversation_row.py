@@ -45,6 +45,11 @@ class ConversationRow(Gtk.Box):
         self._sender_label.add_css_class("conversation-sender")
         top.append(self._sender_label)
 
+        self._pin = Gtk.Image.new_from_icon_name("view-pin-symbolic")
+        self._pin.set_pixel_size(12)
+        self._pin.add_css_class("dim-label")
+        top.append(self._pin)
+
         self._priority = Gtk.Image.new_from_icon_name("mail-mark-important-symbolic")
         self._priority.set_pixel_size(12)
         self._priority.add_css_class("priority-mark")
@@ -114,6 +119,7 @@ class ConversationRow(Gtk.Box):
         self._sender_label.set_label(participants)
         self._star.set_visible(conversation.is_starred)
         self._priority.set_visible(conversation.is_priority)
+        self._pin.set_visible(conversation.is_pinned)
         self._date_label.set_label(mail_sync.format_date(conversation.date))
         self._subject_label.set_label(subject)
         self._preview_label.set_label(conversation.preview)

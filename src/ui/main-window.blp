@@ -177,7 +177,10 @@ template $PostcardMainWindow: Adw.ApplicationWindow {
                         hscrollbar-policy: never;
 
                         child: Gtk.ListView conversation_list {
-                          styles ["navigation-sidebar"]
+                          styles [
+                            "navigation-sidebar",
+                            "inbox-list",
+                          ]
                         };
                       };
                     }
@@ -253,6 +256,13 @@ template $PostcardMainWindow: Adw.ApplicationWindow {
                       icon-name: "non-starred-symbolic";
                       tooltip-text: _("Star");
                       action-name: "win.toggle-star";
+                      sensitive: false;
+                    }
+
+                    Gtk.Button pin_button {
+                      icon-name: "view-pin-symbolic";
+                      tooltip-text: _("Pin to Top");
+                      action-name: "win.toggle-pin";
                       sensitive: false;
                     }
 

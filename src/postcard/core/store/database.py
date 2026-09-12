@@ -24,7 +24,7 @@ from ..models.signature import Signature
 _EMAIL_COLUMNS = """
     id, folder_id, server_id, sender, sender_address, recipient,
     recipient_address, subject, preview, date, unread, starred, message_id,
-    in_reply_to, reference_ids, conversation_id, category, is_priority
+    in_reply_to, reference_ids, conversation_id, category, is_priority, is_pinned
 """
 
 
@@ -138,6 +138,9 @@ MIGRATIONS = [
         body TEXT NOT NULL
     );
     """,
+    # Pinning, apart from priority: priority marks a thread where it is, a pin
+    # keeps it at the top of the inbox.
+    "ALTER TABLE emails ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
 ]
 
 
@@ -910,6 +913,7 @@ class Database:
             conversation_id=row["conversation_id"],
             category=row["category"],
             is_priority=bool(row["is_priority"]),
+            is_pinned=bool(row["is_pinned"]),
         )
 
     # --- signatures ----------------------------------------------------------
@@ -975,6 +979,13 @@ class Database:
                 "UPDATE emails SET category = ? WHERE sender_address = ?",
                 (category, address),
             )
+
+    def set_pinned(self, email_ids: Sequence[int], is_pinned: bool) -> None:
+        self._conn.executemany(
+            "UPDATE emails SET is_pinned = ? WHERE id = ?",
+            [(int(is_pinned), email_id) for email_id in email_ids],
+        )
+        self._conn.commit()
 
     def set_priority(self, email_ids: Sequence[int], is_priority: bool) -> None:
         self._conn.executemany(

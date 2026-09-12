@@ -10,7 +10,7 @@ from datetime import date
 from gettext import gettext as _
 from html import escape
 
-from gi.repository import Adw, Gtk, Pango
+from gi.repository import Gtk, Pango
 
 from .avatar_loader import AvatarLoader
 from .conversation_row import ConversationRow
@@ -25,7 +25,7 @@ from .core.smart_inbox import (
     BUNDLE_ACCOUNT,
     SECTION_LAST_WEEK,
     SECTION_MONTH,
-    SECTION_PRIORITY,
+    SECTION_PINNED,
     SECTION_THIS_MONTH,
     SECTION_THIS_WEEK,
     SECTION_TODAY,
@@ -74,7 +74,7 @@ def bundle_icon(key: str) -> str:
 def section_label(key: str, account_label: AccountLabel) -> str:
     kind, _sep, value = key.partition(":")
     fixed = {
-        SECTION_PRIORITY: _("Priority"),
+        SECTION_PINNED: _("Pinned"),
         SECTION_TODAY: _("Today"),
         SECTION_YESTERDAY: _("Yesterday"),
         SECTION_THIS_WEEK: _("This Week"),
@@ -112,8 +112,24 @@ class BundleRow(Gtk.Box):
             spacing=12, margin_top=8, margin_bottom=8, margin_start=12, margin_end=12
         )
         self.add_css_class("bundle-row")
-        self._avatar = Adw.Avatar(size=40, show_initials=False)
-        self.append(self._avatar)
+        # A rounded square, not a person's round avatar: the first thing that
+        # tells a bundle apart from a conversation.
+        self._icon_box = Gtk.CenterBox(
+            width_request=40,
+            height_request=40,
+            valign=Gtk.Align.CENTER,
+            halign=Gtk.Align.START,
+        )
+        self._icon_box.add_css_class("bundle-icon")
+        # Centred by alignment, not expansion: an expanding child would make
+        # the square grow and push the row's text to the right.
+        self._icon = Gtk.Image(
+            pixel_size=20, halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER
+        )
+        self._icon_box.set_hexpand(False)
+        self._icon_box.set_center_widget(self._icon)
+        self.append(self._icon_box)
+        self._kind_class = ""
 
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True)
         self.append(text)
@@ -122,9 +138,10 @@ class BundleRow(Gtk.Box):
         self._title = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END)
         self._title.add_css_class("conversation-sender")
         title_line.append(self._title)
-        self._count = Gtk.Label(xalign=0, hexpand=True)
-        self._count.add_css_class("dim-label")
+        self._count = Gtk.Label(valign=Gtk.Align.CENTER)
+        self._count.add_css_class("bundle-count")
         title_line.append(self._count)
+        title_line.append(Gtk.Box(hexpand=True))
         self._unread_dot = Gtk.Image.new_from_icon_name("media-record-symbolic")
         self._unread_dot.set_pixel_size(10)
         self._unread_dot.add_css_class("unread-dot")
@@ -140,8 +157,20 @@ class BundleRow(Gtk.Box):
         self._senders.add_css_class("bundle-senders")
         text.append(self._senders)
 
+        # It opens rather than selects, and says so.
+        chevron = Gtk.Image.new_from_icon_name("go-next-symbolic")
+        chevron.set_valign(Gtk.Align.CENTER)
+        chevron.add_css_class("dim-label")
+        self.append(chevron)
+
     def bind(self, bundle: Bundle, account_label: AccountLabel) -> None:
-        self._avatar.set_icon_name(bundle_icon(bundle.key))
+        self._icon.set_from_icon_name(bundle_icon(bundle.key))
+        if self._kind_class:
+            self._icon_box.remove_css_class(self._kind_class)
+        self._kind_class = (
+            f"bundle-{bundle.value if bundle.kind != BUNDLE_ACCOUNT else 'account'}"
+        )
+        self._icon_box.add_css_class(self._kind_class)
         self._title.set_label(bundle_label(bundle.key, account_label))
         self._count.set_label(str(bundle.count))
         self._unread_dot.set_visible(bundle.is_unread)
@@ -171,6 +200,8 @@ class InboxItemRow(Gtk.Box):
 
     def __init__(self, avatars: AvatarLoader | None) -> None:
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        self.add_css_class("inbox-item")
+        self._conversation_priority = False
         self.section = Gtk.Label(xalign=0)
         self.section.add_css_class("inbox-section")
         self.bundle = BundleRow()
@@ -194,8 +225,22 @@ class InboxItemRow(Gtk.Box):
         account_color: int | None,
     ) -> None:
         self.conversation.bind(conversation, is_outgoing, account_label, account_color)
+        self._conversation_priority = conversation.is_priority
         self._show(self.conversation)
 
     def _show(self, shown: Gtk.Widget) -> None:
         for child in (self.section, self.bundle, self.conversation):
             child.set_visible(child is shown)
+        # The tints go on this box, which fills the list row edge to edge (the
+        # list sets no padding of its own), so they cover the same rounded area
+        # the selection does. Never on the list's row itself: touching that
+        # widget from a bind handler leaves GTK with a dangling reference.
+        is_priority = shown is self.conversation and self._conversation_priority
+        for css_class, is_set in (
+            ("priority", is_priority),
+            ("bundle-item", shown is self.bundle),
+        ):
+            if is_set:
+                self.add_css_class(css_class)
+            else:
+                self.remove_css_class(css_class)

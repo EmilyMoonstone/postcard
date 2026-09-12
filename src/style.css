@@ -61,10 +61,44 @@
   font-size: 0.9em;
 }
 
+/* The inbox list's rows carry no padding, so an item's own background fills
+   exactly the rounded area the hover and selection highlights do. */
+.inbox-list > row {
+  padding: 0;
+}
+
+.inbox-item {
+  border-radius: 6px;
+}
+
 /* A priority thread is marked where it sits, in every view and folder. */
-.conversation-row.priority {
-  background-color: alpha(@warning_color, 0.10);
+.inbox-item.priority {
+  background-color: alpha(@warning_color, 0.14);
+}
+
+/* Bundles: a faint tint and rounded-square icons set them apart from mail. */
+.inbox-item.bundle-item {
+  background-color: alpha(currentColor, 0.05);
+}
+
+.bundle-icon {
   border-radius: 10px;
+  color: white;
+  background-color: #77767b;
+}
+
+.bundle-newsletter { background-color: #e5a50a; }
+.bundle-notification { background-color: #3584e4; }
+.bundle-invitation { background-color: #e01b24; }
+.bundle-people { background-color: #2ec27e; }
+.bundle-account { background-color: #9141ac; }
+
+.bundle-count {
+  font-size: 0.8em;
+  font-weight: bold;
+  padding: 0 6px;
+  border-radius: 99px;
+  background-color: alpha(currentColor, 0.12);
 }
 
 .priority-mark {

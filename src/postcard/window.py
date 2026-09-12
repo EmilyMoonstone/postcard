@@ -141,6 +141,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     inbox_view_button: Gtk.MenuButton = Gtk.Template.Child()
     inbox_title: Adw.WindowTitle = Gtk.Template.Child()
     priority_button: Gtk.Button = Gtk.Template.Child()
+    pin_button: Gtk.Button = Gtk.Template.Child()
     compose_button: Gtk.Button = Gtk.Template.Child()
     reply_all_button: Gtk.Button = Gtk.Template.Child()
     reply_button: Gtk.Button = Gtk.Template.Child()
@@ -727,6 +728,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
             ("toggle-priority", self._on_toggle_priority),
+            ("toggle-pin", self._on_toggle_pin),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
             ("compose", self._on_compose_clicked),
@@ -753,6 +755,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 ("win.toggle-read", ["<ctrl>i"]),
                 ("win.toggle-star", ["<ctrl>s"]),
                 ("win.toggle-priority", ["<ctrl>p"]),
+                ("win.toggle-pin", ["<ctrl><shift>p"]),
                 ("win.archive", ["<ctrl>e"]),
                 ("win.trash", ["<ctrl>Delete"]),
                 ("win.compose", ["<ctrl>n"]),
@@ -855,6 +858,19 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._db.set_priority([mail.id for mail in mails], is_priority)
         for mail in mails:
             mail.is_priority = is_priority
+        self._after_flag_change(conversations)
+
+    # A pin keeps a thread at the top of the inbox; like priority it is the
+    # user's alone and stays on this machine.
+    def _on_toggle_pin(self, _action: Gio.SimpleAction, _param: object) -> None:
+        conversations = self._selected_conversations()
+        if not conversations:
+            return
+        is_pinned = not all(item.is_pinned for item in conversations)
+        mails = [mail for conversation in conversations for mail in conversation.emails]
+        self._db.set_pinned([mail.id for mail in mails], is_pinned)
+        for mail in mails:
+            mail.is_pinned = is_pinned
         self._after_flag_change(conversations)
 
     # Files every mail from the selection's senders under a category, now and
@@ -1122,6 +1138,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
             ("toggle-priority", self._on_toggle_priority),
+            ("toggle-pin", self._on_toggle_pin),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
         ):
@@ -1149,7 +1166,11 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         )
         flags.append(read, "context.toggle-read")
         flags.append(star, "context.toggle-star")
+        pin = (
+            _("Unpin") if all(item.is_pinned for item in selected) else _("Pin to Top")
+        )
         flags.append(priority, "context.toggle-priority")
+        flags.append(pin, "context.toggle-pin")
         menu.append_section(None, flags)
 
         categories = Gio.Menu()
@@ -2537,6 +2558,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         else:
             self.priority_button.set_tooltip_text(_("Mark as Priority"))
             self.priority_button.remove_css_class("accent")
+
+        if all(conversation.is_pinned for conversation in selected):
+            self.pin_button.set_tooltip_text(_("Unpin"))
+            self.pin_button.add_css_class("accent")
+        else:
+            self.pin_button.set_tooltip_text(_("Pin to Top"))
+            self.pin_button.remove_css_class("accent")
 
     # Empty the reading pane, releasing each view's WebView as it goes.
     def _clear_thread(self) -> None:

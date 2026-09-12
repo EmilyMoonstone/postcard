@@ -911,3 +911,13 @@ def test_latest_emails_are_the_newest_synced_messages_across_folders(db, folder)
     latest = db.latest_emails([folder.id, archive.id], limit=2)
 
     assert [mail.subject for mail in latest] == ["New", "Middle"]
+
+
+def test_pinning_is_set_and_cleared_per_email(db, folder):
+    incoming(db, folder.id, "1")
+    [mail] = db.emails_in_folder(folder.id)
+
+    db.set_pinned([mail.id], True)
+    assert db.emails_in_folder(folder.id)[0].is_pinned is True
+    db.set_pinned([mail.id], False)
+    assert db.emails_in_folder(folder.id)[0].is_pinned is False
