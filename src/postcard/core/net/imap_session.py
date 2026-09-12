@@ -6,6 +6,7 @@ import re
 from email import policy
 from typing import NamedTuple
 
+from ..mime.preview import PREVIEW_BYTES, preview_text
 from ..models.folder import FolderRole
 
 # Re-exported (the "as" form): MailboxInfo is what list_folders returns, and
@@ -77,6 +78,47 @@ class FetchedHeader(NamedTuple):
     references: str
     seen: bool
     flagged: bool
+    preview: str = ""
+
+
+# The headers a sync reads. Content-Type and Content-Transfer-Encoding are only
+# there to decode the body slice fetched beside them into a preview.
+_HEADER_FIELDS = (
+    "DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES "
+    "CONTENT-TYPE CONTENT-TRANSFER-ENCODING"
+)
+
+# A FETCH reply's first line for a message starts with its sequence number;
+# the lines for its later literals start with a space.
+_MESSAGE_START = re.compile(r"^\d+ \(")
+
+
+def fetch_items(payload: list) -> list[tuple[str, bytes, bytes]]:
+    """Group imaplib's flat FETCH reply into (metadata, header, body) per message.
+
+    imaplib hands back one (meta, literal) tuple per literal, so a message
+    fetched with both a header and a body slice spans two tuples, and any text
+    after the last literal (some servers put FLAGS there) comes as plain bytes.
+    Which literal is which is read from the item name before it, since servers
+    don't all answer in the order the items were asked for.
+    """
+    messages: list[list] = []
+    for item in payload:
+        if isinstance(item, bytes):
+            if messages:
+                messages[-1][0] += item.decode("utf-8", "replace")
+            continue
+        if not isinstance(item, tuple):
+            continue
+        meta = item[0].decode("utf-8", "replace")
+        if _MESSAGE_START.match(meta) or not messages:
+            messages.append(["", b"", b""])
+        current = messages[-1]
+        current[0] += meta
+        item_name = meta[meta.upper().rfind("BODY[") :].upper()
+        slot = 2 if item_name.startswith("BODY[TEXT]") else 1
+        current[slot] = item[1]
+    return [(meta, header, body) for meta, header, body in messages]
 
 
 def decode_mailbox_name(name: str) -> str:
@@ -351,23 +393,17 @@ class ImapSession:
         start = max(1, end - limit + 1)  # exists=1000,limit=50,offset=50 -> 901:950
         status, payload = self._require_imap().fetch(
             f"{start}:{end}",
-            # BODY.PEEK[...] = look at the header WITHOUT marking it \Seen.
-            "(UID FLAGS BODY.PEEK[HEADER.FIELDS "
-            "(DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES)])",
+            # BODY.PEEK[...] = look WITHOUT marking the message \Seen. The
+            # partial TEXT is only the first bytes, for the preview line.
+            f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({_HEADER_FIELDS})] "
+            f"BODY.PEEK[TEXT]<0.{PREVIEW_BYTES}>)",
         )
         if status != STATUS_OK:
             raise ImapError(f"fetch failed: {payload}")
-
-        messages: list[FetchedHeader] = []
-        for item in payload:
-            # imaplib hands each message back as a tuple of metadata bytes
-            # followed by header bytes.  The stray ")" closing lines arrive as
-            # plain bytes instead — we skip those.
-            if not isinstance(item, tuple):
-                continue
-            meta, header_bytes = item
-            messages.append(self._parse(meta.decode("utf-8", "replace"), header_bytes))
-        return messages
+        return [
+            self._parse(meta, header_bytes, body)
+            for meta, header_bytes, body in fetch_items(payload)
+        ]
 
     def fetch_message(self, uid: str) -> bytes:
         """Fetch one full message (headers + body) by its stable UID.
@@ -384,7 +420,7 @@ class ImapSession:
 
         raise ImapError(f"no message body returned for uid {uid}")
 
-    def _parse(self, meta: str, header_bytes: bytes) -> FetchedHeader:
+    def _parse(self, meta: str, header_bytes: bytes, body: bytes) -> FetchedHeader:
         uid = re.search(r"UID (\d+)", meta)
         flags = re.search(r"FLAGS \(([^)]*)\)", meta)
         flag_text = flags.group(1) if flags else ""
@@ -410,4 +446,5 @@ class ImapSession:
             references=header("References"),
             seen=FLAG_SEEN in flag_text,
             flagged=FLAG_FLAGGED in flag_text,
+            preview=preview_text(header_bytes, body) if body else "",
         )

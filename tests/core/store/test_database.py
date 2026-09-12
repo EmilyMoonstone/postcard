@@ -698,3 +698,23 @@ def test_a_copy_already_matched_to_a_server_row_is_not_adopted_twice(db, folder)
     # The same UID again is an ordinary flag update, not a second adoption.
     assert incoming(db, folder.id, "42", message_id="<m1@example.com>") is False
     assert [mail.server_id for mail in db.emails_in_folder(folder.id)] == ["42"]
+
+
+def test_a_sync_fills_in_a_preview_and_search_finds_it(db, folder):
+    incoming(db, folder.id, "7", subject="Treffen", preview="")
+    incoming(
+        db, folder.id, "7", subject="Treffen", preview="Kammersitzung am Donnerstag"
+    )
+
+    [stored] = db.emails_in_folder(folder.id)
+    assert stored.preview == "Kammersitzung am Donnerstag"
+    assert [c.subject for c in db.search_conversations([folder.id], "Kammer")] == [
+        "Treffen"
+    ]
+
+
+def test_a_sync_without_a_preview_keeps_the_one_stored(db, folder):
+    incoming(db, folder.id, "7", preview="Kept")
+    incoming(db, folder.id, "7", preview="")
+
+    assert db.emails_in_folder(folder.id)[0].preview == "Kept"

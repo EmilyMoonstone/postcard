@@ -195,6 +195,17 @@ class Database:
                 INSERT INTO emails_fts(emails_fts, rowid, sender, subject, preview)
                 VALUES ('delete', old.id, old.sender, old.subject, old.preview);
             END;
+
+            -- A sync fills in the preview of a row stored without one. WHEN,
+            -- because the upsert names the column on every sync of every row.
+            CREATE TRIGGER IF NOT EXISTS emails_fts_update
+            AFTER UPDATE OF preview ON emails
+            WHEN old.preview IS NOT new.preview BEGIN
+                INSERT INTO emails_fts(emails_fts, rowid, sender, subject, preview)
+                VALUES ('delete', old.id, old.sender, old.subject, old.preview);
+                INSERT INTO emails_fts(rowid, sender, subject, preview)
+                VALUES (new.id, new.sender, new.subject, new.preview);
+            END;
             """
         )
 
@@ -659,7 +670,9 @@ class Database:
             ON CONFLICT (folder_id, server_id) DO UPDATE SET
                 unread = excluded.unread, starred = excluded.starred,
                 recipient = excluded.recipient,
-                recipient_address = excluded.recipient_address
+                recipient_address = excluded.recipient_address,
+                preview = CASE WHEN excluded.preview != ''
+                    THEN excluded.preview ELSE emails.preview END
             """,
             (
                 folder_id,

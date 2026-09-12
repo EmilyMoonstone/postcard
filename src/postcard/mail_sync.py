@@ -371,6 +371,7 @@ def _to_message_header(fetched: FetchedHeader) -> MessageHeader:
         date=_iso_date(fetched.date),
         is_unread=not fetched.seen,
         is_starred=fetched.flagged,
+        preview=fetched.preview,
         message_id=fetched.message_id,
         in_reply_to=fetched.in_reply_to,
         references=fetched.references,

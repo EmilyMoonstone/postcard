@@ -352,3 +352,42 @@ def test_special_use_attributes_match_regardless_of_case():
     assert special_use_role("\\HasNoChildren \\JUNK") == "junk"
     assert special_use_role("\\Marked \\Drafts") == "drafts"
     assert special_use_role("\\HasNoChildren") == ""
+
+
+# --- previews from a body slice -----------------------------------------------
+
+
+def test_each_message_s_header_and_body_slice_are_kept_together(monkeypatch):
+    reply = (
+        "OK",
+        [
+            (
+                b"1 (UID 42 FLAGS (\\Seen) BODY[HEADER.FIELDS (DATE)] {60}",
+                b"Content-Type: text/plain\r\n" + HEADER_BYTES,
+            ),
+            (b" BODY[TEXT]<0> {11}", b"First mail\r\n"),
+            b")",
+            # Answered body first, and FLAGS after the last literal.
+            (b"2 (UID 43 BODY[TEXT]<0> {12}", b"Second mail\r\n"),
+            (b" BODY[HEADER.FIELDS (DATE)] {40}", b"Subject: Two\r\n\r\n"),
+            b" FLAGS (\\Flagged))",
+        ],
+    )
+    session = connect(monkeypatch, FakeImap(fetch_reply=reply))
+
+    first, second = session.fetch_recent_headers(exists=2, limit=50)
+
+    assert (first.uid, first.subject, first.preview) == ("42", "Lunch", "First mail")
+    assert (second.uid, second.subject, second.preview) == ("43", "Two", "Second mail")
+    assert second.flagged is True
+
+
+def test_the_fetch_asks_for_a_body_slice_without_marking_it_seen(monkeypatch):
+    imap = FakeImap(fetch_reply=("OK", []))
+    session = connect(monkeypatch, imap)
+
+    session.fetch_recent_headers(exists=3, limit=50)
+
+    [(_sequence, items)] = imap.calls
+    assert "BODY.PEEK[TEXT]<0.2048>" in items
+    assert "CONTENT-TRANSFER-ENCODING" in items
