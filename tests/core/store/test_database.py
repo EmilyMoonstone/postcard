@@ -854,3 +854,60 @@ def test_starred_conversations_come_whole_from_every_folder_given(db, folder):
 
     assert subjects == ["Also starred", "Starred"]
     assert db.starred_conversations([]) == []
+
+
+# --- account settings and signatures ----------------------------------------------
+
+
+def test_an_account_can_be_edited(db, folder):
+    [account] = db.accounts()
+    account.display_name = "Ada L."
+    account.imap_host = "mxe80f.netcup.net"
+    account.imap_port = 993
+    account.load_remote_images = True
+
+    db.update_account(account)
+
+    [stored] = db.accounts()
+    assert (stored.display_name, stored.imap_host, stored.load_remote_images) == (
+        "Ada L.",
+        "mxe80f.netcup.net",
+        True,
+    )
+
+
+def test_signatures_are_listed_by_name_and_assigned_per_account(db, folder):
+    work = db.save_signature("Work", "Emily Pauli\nJugendwerk")
+    db.save_signature("Casual", "Liebe Grüße")
+    [account] = db.accounts()
+    account.signature_id = work
+    db.update_account(account)
+
+    assert [s.name for s in db.signatures()] == ["Casual", "Work"]
+    assert db.signature_text_for(account.id) == "Emily Pauli\nJugendwerk"
+
+    db.save_signature("Work", "Emily", work)
+    assert db.signature_text_for(account.id) == "Emily"
+
+
+def test_deleting_a_signature_unassigns_it(db, folder):
+    signature = db.save_signature("Work", "Emily")
+    [account] = db.accounts()
+    account.signature_id = signature
+    db.update_account(account)
+
+    db.delete_signature(signature)
+
+    assert db.accounts()[0].signature_id is None
+    assert db.signature_text_for(account.id) == ""
+
+
+def test_latest_emails_are_the_newest_synced_messages_across_folders(db, folder):
+    archive = db.get_or_create_folder(folder.account_id, "Archive")
+    incoming(db, folder.id, "1", subject="Old", date="2026-09-01T10:00:00+00:00")
+    incoming(db, archive.id, "2", subject="New", date="2026-09-12T10:00:00+00:00")
+    incoming(db, folder.id, "3", subject="Middle", date="2026-09-05T10:00:00+00:00")
+
+    latest = db.latest_emails([folder.id, archive.id], limit=2)
+
+    assert [mail.subject for mail in latest] == ["New", "Middle"]

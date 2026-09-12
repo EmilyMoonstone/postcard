@@ -12,6 +12,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from .composer_window import composer_for_mailto
+from .core.settings_migration import migrate_global_settings
 from .core.store.database import Database
 from .preferences_dialog import PostcardPreferencesDialog
 from .tray import Tray
@@ -69,6 +70,7 @@ class PostcardApplication(Adw.Application):
 
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
+        migrate_global_settings(self.db, self.settings)
         self._load_css()
         self.tray.start()
         self.settings.connect(
@@ -116,7 +118,7 @@ class PostcardApplication(Adw.Application):
             logger.warning("no account to compose %s from, opening the window", uri)
             self.do_activate()
             return
-        composer_for_mailto(self, self.db, accounts[0], self.settings, uri).present()
+        composer_for_mailto(self, self.db, accounts[0], uri).present()
 
     def _load_css(self) -> None:
         display = Gdk.Display.get_default()
@@ -156,7 +158,7 @@ class PostcardApplication(Adw.Application):
         about.present(self.props.active_window)
 
     def on_preferences_action(self, *_args: object) -> None:
-        dialog = PostcardPreferencesDialog(self.settings)
+        dialog = PostcardPreferencesDialog(self.settings, self.db)
         dialog.present(self.props.active_window)
 
     def on_open_mail(self, _action: Gio.SimpleAction, param: GLib.Variant) -> None:

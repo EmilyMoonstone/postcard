@@ -196,6 +196,27 @@ def poke_accounts(app: PostcardApplication) -> list[Callable[[], object]]:
         )
         win._open_bundle(bundle.key)
 
+    def open_dialogs() -> None:
+        from postcard.account_dialog import PostcardAccountDialog
+        from postcard.preferences_dialog import PostcardPreferencesDialog
+
+        win = window_of(app)
+        app.db.save_signature("Work", "Ada\nExample Ltd")
+        add = PostcardAccountDialog(app.db)
+        add.present(win)
+        add.email_row.set_text("ada@example.org")
+        add.hosting_row.set_selected(3)
+        add.close()
+        account = app.db.accounts()[0]
+        edit = PostcardAccountDialog(app.db, account)
+        edit.present(win)
+        edit.remote_images_row.set_active(True)
+        edit.signature_row.set_selected(1)
+        edit._save()
+        preferences = PostcardPreferencesDialog(app.settings, app.db)
+        preferences.present(win)
+        preferences.close()
+
     return [
         lambda: window_of(app)._sync_all(),
         lambda: window_of(app)._select_folder_by_id(-1),
@@ -234,6 +255,7 @@ def poke_accounts(app: PostcardApplication) -> list[Callable[[], object]]:
         lambda: window_of(app)._on_search_timeout(),
         lambda: window_of(app).search_entry.set_text(""),
         lambda: window_of(app)._on_compose_clicked(),
+        open_dialogs,
         lambda: window_of(app)._on_mail_arrived(1),
         lambda: window_of(app)._on_refresh_clicked(),
         lambda: window_of(app).close(),

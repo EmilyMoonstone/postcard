@@ -5,6 +5,7 @@ from gi.repository import Adw, Gtk
 from . import mail_sync
 from .account_dialog import PostcardAccountDialog
 from .core import secrets
+from .core.models.account import Account
 from .core.store.database import Database
 from .online_accounts_dialog import PostcardOnlineAccountsDialog
 
@@ -37,7 +38,12 @@ class PostcardAccountsDialog(Adw.Dialog):
         self._bundle_rows.clear()
 
         for account in self._db.accounts():
-            row = Adw.ActionRow(title=account.email, subtitle=account.display_name)
+            row = Adw.ActionRow(
+                title=account.email, subtitle=account.display_name, activatable=True
+            )
+            row.add_prefix(Gtk.Image.new_from_icon_name("document-edit-symbolic"))
+            row.set_tooltip_text(_("Edit Account"))
+            row.connect("activated", self._on_edit_activated, account)
 
             remove_button = Gtk.Button(
                 icon_name="user-trash-symbolic",
@@ -60,6 +66,11 @@ class PostcardAccountsDialog(Adw.Dialog):
             self.bundles_group.add(switch)
             self._bundle_rows.append(switch)
         self.bundles_group.set_visible(len(self._bundle_rows) > 1)
+
+    def _on_edit_activated(self, _row: Adw.ActionRow, account: Account) -> None:
+        dialog = PostcardAccountDialog(self._db, account)
+        dialog.connect("account-changed", lambda _d: self._reload())
+        dialog.present(self)
 
     def _on_bundle_toggled(
         self, switch: Adw.SwitchRow, _param: object, account_id: int

@@ -39,6 +39,7 @@ from .inbox_rows import InboxItemRow, bundle_label, category_label
 from .mail_watch import MailWatcher
 from .message_view import LoadCallback, MessageView
 from .online_accounts_dialog import PostcardOnlineAccountsDialog
+from .tray import menu_label
 from .window_types import (
     ALL_ARCHIVE_ID,
     ALL_DRAFTS_ID,
@@ -73,6 +74,9 @@ logger = logging.getLogger(__name__)
 SETTING_FOLDER_WIDTH = "folder-sidebar-width"
 SETTING_CONVERSATION_WIDTH = "conversation-sidebar-width"
 SETTING_ACCOUNT_DISPLAY_NAME = "show-account-display-name"
+
+# How many of the newest inbox messages the tray menu lists.
+TRAY_LATEST_MAILS = 8
 
 # Move is the one action carrying a parameter (the destination folder name), so
 # it is registered on its own wherever these are.
@@ -251,6 +255,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._watcher = MailWatcher(self._on_mail_arrived)
         self._interval_handler = self._settings.connect(
             f"changed::{SETTING_SYNC_INTERVAL}", lambda *_: self._reschedule_sync()
+        )
+        self._push_handler = self._settings.connect(
+            "changed::push-enabled", lambda *_: self._watch_accounts()
         )
 
         self.connect("close-request", self._on_close_request)
@@ -493,6 +500,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._watcher.stop_all()
         self._network.disconnect(self._network_handler)
         self._settings.disconnect(self._interval_handler)
+        self._settings.disconnect(self._push_handler)
         self._settings.disconnect(self._avatar_handler)
         self._settings.disconnect(self._account_label_handler)
         self._settings.disconnect(self._inbox_view_handler)
@@ -593,10 +601,10 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._start_sync(self._db.accounts()[-1], in_background=True)
         self._watch_accounts()
 
-    def _signature_text(self) -> str:
-        if not self._settings.get_boolean("signature-enabled"):
-            return ""
-        return self._settings.get_string("signature-text").strip()
+    def _signature_text(self, account: Account | None = None) -> str:
+        """The default signature of the account a message goes out from."""
+        account = account or self._account
+        return self._db.signature_text_for(account.id) if account is not None else ""
 
     def _on_compose_clicked(self, *_args: object) -> None:
         # The tray can reach this before any account exists.
@@ -629,7 +637,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             from_header,
             str(headers["Date"] or ""),
             _original_text(self._active_view.parsed),
-            signature=self._signature_text(),
+            signature=self._signature_text(account),
         )
         self._open_composer(
             to=to_addr,
@@ -657,6 +665,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             or self._active_view.raw is None
         ):
             return
+        account = self._account_for_reply()
         headers = email.message_from_bytes(self._active_view.raw, policy=policy.default)
         subject = compose.forward_subject(str(headers["Subject"] or ""))
         parsed = self._active_view.parsed
@@ -665,20 +674,16 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             str(headers["Date"] or ""),
             str(headers["Subject"] or ""),
             _original_text(parsed),
-            signature=self._signature_text(),
+            signature=self._signature_text(account),
         )
-        self._open_composer(
-            subject=subject, body=body, account=self._account_for_reply()
-        )
+        self._open_composer(subject=subject, body=body, account=account)
 
     # Open the composer for a mailto: link handed to us by the desktop.
     def open_mailto(self, uri: str, account: Account | None = None) -> None:
         account = account or self._account
         if account is None:
             return
-        composer = composer_for_mailto(
-            self.get_application(), self._db, account, self._settings, uri
-        )
+        composer = composer_for_mailto(self.get_application(), self._db, account, uri)
         composer.connect("finished", self._on_composer_finished)
         composer.present()
 
@@ -1967,12 +1972,23 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         app = cast("PostcardApplication | None", self.get_application())
         if app is None:
             return
-        app.tray.set_unread(
-            sum(
-                self._unread_badge(folder)
-                for folder in folders
-                if mail_sync.folder_role(folder) is mail_sync.FolderRole.INBOX
-            )
+        inboxes = [
+            folder
+            for folder in folders
+            if mail_sync.folder_role(folder) is mail_sync.FolderRole.INBOX
+        ]
+        app.tray.set_unread(sum(self._unread_badge(folder) for folder in inboxes))
+        app.tray.set_latest(
+            [
+                (
+                    mail.folder_id,
+                    mail.server_id or "",
+                    menu_label(mail.sender, mail.subject, mail.is_unread),
+                )
+                for mail in self._db.latest_emails(
+                    [folder.id for folder in inboxes], TRAY_LATEST_MAILS
+                )
+            ]
         )
 
     def _rebuild_folder_tree(self) -> None:
@@ -2507,9 +2523,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self.reader_subject.set_label(conversation.subject)
         self._clear_thread()
 
-        should_load_remote_images = self._settings.get_boolean("load-remote-images")
         # A conversation never spans folders, so one lookup covers the thread.
         account, folder = self._origin(conversation.latest) or (None, None)
+        should_load_remote_images = account is not None and account.load_remote_images
         # Which of my accounts got this -- the reader's version of the list
         # row's account label, so it appears where that does: only while
         # several inboxes are merged, and never in an outgoing folder, where
@@ -3081,12 +3097,10 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     def _watch_accounts(self) -> None:
         """Keep push running for exactly the accounts that should have it.
 
-        Manual-only sync (an interval of 0) means the user wants no background
-        traffic, and an IDLE connection is exactly that.
+        Its own switch, not tied to the sync interval: push covers new mail in
+        the inboxes, and the interval everything else.
         """
-        is_wanted = (
-            self._is_online and self._settings.get_int(SETTING_SYNC_INTERVAL) > 0
-        )
+        is_wanted = self._is_online and self._settings.get_boolean("push-enabled")
         self._watcher.watch(list(self._accounts.values()) if is_wanted else [])
 
     def _on_mail_arrived(self, account_id: int) -> bool:

@@ -94,6 +94,10 @@ MENU_XML = """
       <arg name="id" type="i" direction="in"/>
       <arg name="needUpdate" type="b" direction="out"/>
     </method>
+    <signal name="LayoutUpdated">
+      <arg name="revision" type="u"/>
+      <arg name="parent" type="i"/>
+    </signal>
   </interface>
 </node>
 """
@@ -115,7 +119,12 @@ MENU_LABELS = {
     SYNC_ITEM_ID: _("Refresh Inbox"),
     QUIT_ITEM_ID: _("Quit"),
 }
-MENU_REVISION = 1
+
+# The newest mail sits above the fixed items, with ids from here up, so a click
+# can be told apart from theirs.
+FIRST_MAIL_ITEM_ID = 100
+SEPARATOR_ITEM_ID = 99
+LATEST_MAIL_LABEL_CHARS = 60
 
 ITEM_PROPERTIES = {
     "Category": GLib.Variant("s", "Communications"),
@@ -198,13 +207,21 @@ def _network_order_argb(surface: cairo.ImageSurface) -> bytes:
     return bytes(argb)
 
 
-def _menu_layout() -> GLib.Variant:
-    items = [
-        GLib.Variant("(ia{sv}av)", (item_id, {"label": GLib.Variant("s", label)}, []))
-        for item_id, label in MENU_LABELS.items()
-    ]
-    root = (ROOT_ITEM_ID, {"children-display": GLib.Variant("s", "submenu")}, items)
-    return GLib.Variant("(u(ia{sv}av))", (MENU_REVISION, root))
+def menu_label(sender: str, subject: str, is_unread: bool) -> str:
+    """One newest-mail item: "● Ada — Lunch", shortened to fit a menu.
+
+    dbusmenu labels take _ as a mnemonic marker, so a literal one is doubled.
+    """
+    text = f"{sender} — {subject}" if sender else subject
+    if len(text) > LATEST_MAIL_LABEL_CHARS:
+        text = text[: LATEST_MAIL_LABEL_CHARS - 1].rstrip() + "…"
+    return ("● " if is_unread else "") + text.replace("_", "__")
+
+
+def _menu_properties(item_id: int, labels: dict[int, str]) -> dict[str, GLib.Variant]:
+    if item_id == SEPARATOR_ITEM_ID:
+        return {"type": GLib.Variant("s", "separator")}
+    return {"label": GLib.Variant("s", labels[item_id])}
 
 
 class Tray:
@@ -214,6 +231,9 @@ class Tray:
         self._status = STATUS_HIDDEN
         self._unread = 0
         self._badge: tuple[int, int, bytes] | None = None
+        # (folder id, uid, label) per newest-mail item, in menu order.
+        self._latest: list[tuple[int, str, str]] = []
+        self._revision = 1
 
     def start(self) -> None:
         """Export the item, then register it with whatever watcher turns up."""
@@ -254,6 +274,40 @@ class Tray:
         self._unread = count
         self._badge = _badged_icon(count) if count else None
         self._bus.emit_signal(None, ITEM_PATH, ITEM_INTERFACE, "NewIcon", None)
+
+    def set_latest(self, mails: list[tuple[int, str, str]]) -> None:
+        """Show these (folder id, uid, label) mails at the top of the menu."""
+        if self._bus is None or mails == self._latest:
+            return
+        self._latest = mails
+        self._revision += 1
+        self._bus.emit_signal(
+            None,
+            MENU_PATH,
+            "com.canonical.dbusmenu",
+            "LayoutUpdated",
+            GLib.Variant("(ui)", (self._revision, ROOT_ITEM_ID)),
+        )
+
+    def _labels(self) -> dict[int, str]:
+        labels = {
+            FIRST_MAIL_ITEM_ID + index: label
+            for index, (_folder, _uid, label) in enumerate(self._latest)
+        }
+        return labels | MENU_LABELS
+
+    def _menu_layout(self) -> GLib.Variant:
+        labels = self._labels()
+        ids = [FIRST_MAIL_ITEM_ID + index for index in range(len(self._latest))]
+        if ids:
+            ids.append(SEPARATOR_ITEM_ID)
+        ids += list(MENU_LABELS)
+        items = [
+            GLib.Variant("(ia{sv}av)", (item_id, _menu_properties(item_id, labels), []))
+            for item_id in ids
+        ]
+        root = (ROOT_ITEM_ID, {"children-display": GLib.Variant("s", "submenu")}, items)
+        return GLib.Variant("(u(ia{sv}av))", (self._revision, root))
 
     def _on_watcher_appeared(
         self, bus: Gio.DBusConnection, _name: str, _owner: str
@@ -328,13 +382,14 @@ class Tray:
         invocation: Gio.DBusMethodInvocation,
     ) -> None:
         if method == "GetLayout":
-            invocation.return_value(_menu_layout())
+            invocation.return_value(self._menu_layout())
         elif method == "GetGroupProperties":
             wanted_ids, _names = parameters.unpack()
+            labels = self._labels()
             rows = [
-                (item_id, {"label": GLib.Variant("s", MENU_LABELS[item_id])})
+                (item_id, _menu_properties(item_id, labels))
                 for item_id in wanted_ids
-                if item_id in MENU_LABELS
+                if item_id in labels or item_id == SEPARATOR_ITEM_ID
             ]
             invocation.return_value(GLib.Variant("(a(ia{sv}))", (rows,)))
         elif method == "Event":
@@ -350,7 +405,15 @@ class Tray:
             invocation.return_value(GLib.Variant("(b)", (False,)))
 
     def _on_menu_event(self, item_id: int, event: str) -> None:
-        if event == "clicked" and item_id in MENU_ACTIONS:
+        if event != "clicked":
+            return
+        index = item_id - FIRST_MAIL_ITEM_ID
+        if 0 <= index < len(self._latest):
+            folder_id, uid, _label = self._latest[index]
+            action = self._app.lookup_action("open-mail")
+            if action is not None:
+                action.activate(GLib.Variant("(is)", (folder_id, uid)))
+        elif item_id in MENU_ACTIONS:
             self._activate(MENU_ACTIONS[item_id])
 
     def _activate(self, action: str) -> None:

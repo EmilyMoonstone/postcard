@@ -56,6 +56,8 @@ class Account(GObject.Object):
         goa_id: str = "",
         protocol: str = PROTOCOL_IMAP,
         is_bundled: bool = False,
+        load_remote_images: bool = False,
+        signature_id: int | None = None,
     ) -> None:
         super().__init__()
         self.id: int = id
@@ -77,6 +79,10 @@ class Account(GObject.Object):
         # Whether the unified inbox gathers this account's mail into one
         # bundle row instead of listing each conversation.
         self.is_bundled: bool = is_bundled
+        # Whether this account's messages show remote images without asking.
+        self.load_remote_images: bool = load_remote_images
+        # The signature new messages from this account start with, if any.
+        self.signature_id: int | None = signature_id
 
     @property
     def is_graph(self) -> bool:

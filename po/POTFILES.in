@@ -3,11 +3,13 @@
 data/in.gxanshu.postcard.desktop.in
 data/in.gxanshu.postcard.gschema.xml
 data/in.gxanshu.postcard.metainfo.xml.in
+src/postcard/account_dialog.py
 src/postcard/accounts_dialog.py
 src/postcard/application.py
 src/postcard/composer_window.py
 src/postcard/inbox_rows.py
 src/postcard/core/net/errors.py
+src/postcard/core/settings_migration.py
 src/postcard/mail_sync.py
 src/postcard/message_view.py
 src/postcard/online_accounts_dialog.py
