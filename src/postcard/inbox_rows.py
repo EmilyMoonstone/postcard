@@ -91,6 +91,19 @@ def section_label(key: str, account_label: AccountLabel) -> str:
     return bundle_label(key, account_label)
 
 
+# A sender row names at most this many characters of each sender.
+SENDER_CHARS = 22
+
+
+def short_sender(name: str) -> str:
+    """A bundle's sender as few words as will do: the address' local part for a
+    sender with no name, cut short either way."""
+    if "@" in name and " " not in name.strip():
+        name = name.partition("@")[0]
+    name = name.strip()
+    return name if len(name) <= SENDER_CHARS else name[: SENDER_CHARS - 1] + "…"
+
+
 class BundleRow(Gtk.Box):
     __gtype_name__ = "PostcardBundleRow"
 
@@ -136,7 +149,7 @@ class BundleRow(Gtk.Box):
         shown = senders[:BUNDLE_SENDERS]
         parts = []
         for sender in shown:
-            name = escape(sender.name)
+            name = escape(short_sender(sender.name))
             text = f"<b>{name}</b>" if sender.is_unread else name
             if sender.count > 1:
                 text += f" <span alpha='60%'>{sender.count}</span>"
@@ -174,9 +187,13 @@ class InboxItemRow(Gtk.Box):
         self._show(self.bundle)
 
     def show_conversation(
-        self, conversation: Conversation, is_outgoing: bool, account_label: str
+        self,
+        conversation: Conversation,
+        is_outgoing: bool,
+        account_label: str,
+        account_color: int | None,
     ) -> None:
-        self.conversation.bind(conversation, is_outgoing, account_label)
+        self.conversation.bind(conversation, is_outgoing, account_label, account_color)
         self._show(self.conversation)
 
     def _show(self, shown: Gtk.Widget) -> None:

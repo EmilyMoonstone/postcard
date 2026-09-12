@@ -99,6 +99,14 @@ def _status_label(status: str) -> str:
     }.get(status.upper(), _("No answer yet"))
 
 
+def ui_font() -> tuple[str, str]:
+    """GTK's "Cantarell 11" style font setting as (family, point size)."""
+    settings = Gtk.Settings.get_default()
+    description = (settings and settings.get_property("gtk-font-name")) or "Sans 11"
+    family, _sep, size = description.rpartition(" ")
+    return (family, size) if size.isdigit() else (description, "11")
+
+
 def _build_names(email: Email, delivered_to: str) -> Gtk.Box:
     names = Gtk.Box(
         orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER
@@ -195,7 +203,9 @@ class MessageView(Gtk.Box):
         header.append(_build_names(email, delivered_to))
 
         date = Gtk.Label(
-            label=mail_sync.format_date(email.date), xalign=1, valign=Gtk.Align.CENTER
+            label=mail_sync.format_full_date(email.date),
+            xalign=1,
+            valign=Gtk.Align.CENTER,
         )
         date.add_css_class("dim-label")
         date.add_css_class("caption")
@@ -464,24 +474,42 @@ class MessageView(Gtk.Box):
         )
         self._theme_button.add_css_class("osd")
         self._theme_button.add_css_class("circular")
+        self._theme_button.add_css_class("body-theme-button")
         self._theme_button.connect("clicked", self._on_theme_clicked)
         frame.add_overlay(self._theme_button)
+        # Shown only while the pointer is over the body, so it never sits on
+        # top of the first line of text.
+        hover = Gtk.EventControllerMotion()
+        hover.connect("enter", lambda *_: self._set_theme_button_shown(True))
+        hover.connect("leave", lambda *_: self._set_theme_button_shown(False))
+        frame.add_controller(hover)
+        self._set_theme_button_shown(False)
         self._body.append(frame)
         self._update_theme_button()
         self._dark_handler = self._style_manager.connect(
             "notify::dark", self._on_style_changed
         )
 
+    def _set_theme_button_shown(self, is_shown: bool) -> None:
+        if self._theme_button is not None:
+            self._theme_button.set_opacity(1.0 if is_shown else 0.0)
+            self._theme_button.set_can_target(is_shown)
+
     def _is_dark(self) -> bool:
+        """Dark with the app, unless the message brings colours of its own --
+        those were designed for a light page, and only the page would change."""
         if self._is_dark_override is not None:
             return self._is_dark_override
-        return self._style_manager.get_dark()
+        return self._style_manager.get_dark() and not message_parser.has_own_colors(
+            self._html or ""
+        )
 
     def _sandboxed_html(self) -> str:
         return message_parser.sandbox_html(
             self._html or "",
             are_remote_images_allowed=self._should_load_remote_images,
             is_dark=self._is_dark(),
+            font=ui_font(),
         )
 
     def _update_theme_button(self) -> None:

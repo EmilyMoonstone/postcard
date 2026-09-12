@@ -1,6 +1,9 @@
+import pytest
+
 from postcard.core.mime.message_parser import (
     Unsubscribe,
     _format_date,
+    has_own_colors,
     parse_message,
     sandbox_html,
 )
@@ -250,3 +253,40 @@ def test_a_body_follows_the_reader_s_light_or_dark_colours() -> None:
     assert "color-scheme:light" in light and "#ffffff" in light
     # Still no remote subresources either way.
     assert "img-src data:" in dark
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<table><tr><td bgcolor="#eeeeee">Autor</td></tr></table>',
+        '<p style="background-color: #fff">x</p>',
+        '<span style="color:#333">x</span>',
+        '<font color="red">x</font>',
+    ],
+)
+def test_a_body_with_colours_of_its_own_is_recognized(html) -> None:
+    assert has_own_colors(html)
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<p>Hallo Frau Pauli,</p><p>wie mir Herr Schöpp geschrieben hat …</p>",
+        '<div style="background: transparent; color: inherit">x</div>',
+        '<p class="border-color">x</p>',
+    ],
+)
+def test_a_plain_body_takes_the_reader_s_colours(html) -> None:
+    assert not has_own_colors(html)
+
+
+def test_the_ui_font_is_the_default_and_cannot_break_out_of_the_style() -> None:
+    page = sandbox_html(
+        "<p>hi</p>",
+        are_remote_images_allowed=False,
+        font=('Cantarell"}</style><script>', "11"),
+    )
+
+    # "<", quotes and braces are dropped, so the family can't end the style.
+    assert 'font-family:"Cantarell/stylescript",sans-serif;font-size:11pt' in page
+    assert page.count("</style>") == 1

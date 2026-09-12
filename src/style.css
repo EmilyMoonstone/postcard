@@ -76,3 +76,18 @@
   font-weight: bold;
   opacity: 0.65;
 }
+
+.body-theme-button {
+  transition: opacity 150ms ease-out;
+}
+
+/* One colour per account, from the Adwaita palette: the dot on a merged
+   inbox's rows and the icon of the account's row in the sidebar. */
+.account-color-0 { color: #3584e4; }
+.account-color-1 { color: #2ec27e; }
+.account-color-2 { color: #e5a50a; }
+.account-color-3 { color: #ff7800; }
+.account-color-4 { color: #e01b24; }
+.account-color-5 { color: #9141ac; }
+.account-color-6 { color: #986a44; }
+.account-color-7 { color: #2190a4; }

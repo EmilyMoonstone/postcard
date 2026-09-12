@@ -1329,3 +1329,13 @@ def test_other_servers_are_not_asked_gmail_s_categories(monkeypatch):
 
     [message] = fetch_mailbox(account(), CREDENTIAL, should_count_unread=False).messages
     assert message.category == "people"
+
+
+def test_the_reader_shows_the_full_date_and_time():
+    today = datetime.now().astimezone().replace(hour=10, minute=5)
+    older = (today - timedelta(days=9)).replace(hour=14, minute=32)
+
+    assert mail_sync.format_full_date(today.isoformat()) == "Today 10:05"
+    assert mail_sync.format_full_date(older.isoformat()).endswith("14:32")
+    assert str(older.year) in mail_sync.format_full_date(older.isoformat())
+    assert mail_sync.format_full_date("garbage") == "garbage"

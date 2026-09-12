@@ -21,6 +21,7 @@ from .account_dialog import PostcardAccountDialog
 from .accounts_dialog import PostcardAccountsDialog
 from .avatar_loader import AvatarLoader
 from .composer_window import PostcardComposerWindow, composer_for_mailto
+from .conversation_row import account_color_class
 from .core import compose, secrets, smart_inbox
 from .core.categories import CATEGORIES
 from .core.mime.invitation import Invitation
@@ -326,7 +327,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._folder_rows: dict[int, FolderRow] = {}
         # What each bound row was given beyond its folder: the account label it
         # shows under a group, and whether it is that account's inbox row.
-        self._folder_row_labels: dict[int, tuple[str | None, bool]] = {}
+        self._folder_row_labels: dict[int, tuple[str | None, bool, str]] = {}
         # Each account's inbox row, so its sync spinner can start and stop.
         self._account_rows: dict[int, FolderRow] = {}
         # The account ids and (id, parent_id, role) of the folders the tree was
@@ -1677,14 +1678,19 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         group = parent.get_item() if parent is not None else None
         label = None
         is_account_inbox = False
+        color_class = ""
         if isinstance(group, Folder) and group.id < 0:
             # Under a group, a folder is told apart by its account.
             account = self._accounts.get(entry.account_id)
             label = self._account_label(account) if account is not None else None
             is_account_inbox = group.id == ALL_INBOXES_ID
+            if len(self._accounts) > 1:
+                color_class = account_color_class(self._account_color(entry.account_id))
         self._folder_rows[entry.id] = row
-        self._folder_row_labels[entry.id] = (label, is_account_inbox)
-        row.bind(entry, self._unread_badge(entry), label, is_account_inbox)
+        self._folder_row_labels[entry.id] = (label, is_account_inbox, color_class)
+        row.bind(
+            entry, self._sidebar_badge(entry), label, is_account_inbox, color_class
+        )
         if is_account_inbox:
             self._account_rows[entry.account_id] = row
             row.set_syncing(entry.account_id in self._syncing_account_ids)
@@ -1789,6 +1795,23 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         return (
             self._current_folder is not None and self._current_folder.id == STARRED_ID
         )
+
+    def _account_color(self, account_id: int) -> int:
+        """An account's colour index: its place among the accounts."""
+        ids = list(self._accounts)
+        return ids.index(account_id) if account_id in ids else 0
+
+    # Unread counts of mail nobody reads as new -- sent, drafted, deleted or
+    # junk -- are noise in the sidebar, as Spark has it.
+    def _sidebar_badge(self, folder: Folder) -> int:
+        if mail_sync.folder_role(folder) in (
+            mail_sync.FolderRole.SENT,
+            mail_sync.FolderRole.DRAFTS,
+            mail_sync.FolderRole.TRASH,
+            mail_sync.FolderRole.JUNK,
+        ):
+            return 0
+        return self._unread_badge(folder)
 
     def _unread_badge(self, folder: Folder) -> int:
         """What the sidebar shows next to a folder.
@@ -1961,10 +1984,16 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             row = self._folder_rows.get(folder.id)
             if row is None:
                 continue
-            label, is_account_inbox = self._folder_row_labels.get(
-                folder.id, (None, False)
+            label, is_account_inbox, color_class = self._folder_row_labels.get(
+                folder.id, (None, False, "")
             )
-            row.bind(folder, self._unread_badge(folder), label, is_account_inbox)
+            row.bind(
+                folder,
+                self._sidebar_badge(folder),
+                label,
+                is_account_inbox,
+                color_class,
+            )
             if is_account_inbox:
                 row.set_syncing(folder.account_id in self._syncing_account_ids)
 
@@ -2405,12 +2434,14 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 return
             assert isinstance(entry, Conversation)
             account, folder = self._origin(entry.latest) or (None, None)
+            is_unified = account is not None and self._is_unified()
             row.show_conversation(
                 entry,
                 is_outgoing=folder is not None and mail_sync.is_outgoing(folder),
-                account_label=account.short_label
-                if account is not None and self._is_unified()
-                else "",
+                account_label=account.email if account is not None else "",
+                account_color=self._account_color(account.id)
+                if is_unified and account is not None and len(self._accounts) > 1
+                else None,
             )
 
         factory.connect("setup", on_setup)

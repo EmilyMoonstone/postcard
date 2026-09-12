@@ -142,6 +142,23 @@ _CSP = "default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src d
 _CSP_WITH_IMAGES = _CSP + " https: http:"
 
 
+# Signs a message was designed with colours of its own: a bgcolor attribute, a
+# <font color>, or a CSS background or color that isn't a no-op. Such a body is
+# shown on its own light page by default -- darkening only the page behind it
+# leaves light table cells with the reader's light text on them.
+_OWN_COLORS = re.compile(
+    r"\bbgcolor\s*=|<font\b[^>]*\bcolor\s*="
+    r"|(?<![-\w])(?:background(?:-color)?|color)\s*:"
+    r"(?!\s*(?:inherit|initial|unset|transparent|currentcolor|none)\b)",
+    re.IGNORECASE,
+)
+
+
+def has_own_colors(html: str) -> bool:
+    """Whether a message body sets colours, and so reads best as it was made."""
+    return bool(_OWN_COLORS.search(html))
+
+
 # The reader's own colours, so a message sits in the UI instead of on a white
 # sheet. Only defaults: a message that sets its own colours keeps them, which is
 # what the light/dark switch above each body is for.
@@ -157,11 +174,23 @@ _BASE_STYLE = "body{margin:12px;overflow-wrap:anywhere}img{max-width:100%;height
 
 
 def sandbox_html(
-    html: str, *, are_remote_images_allowed: bool, is_dark: bool = False
+    html: str,
+    *,
+    are_remote_images_allowed: bool,
+    is_dark: bool = False,
+    font: tuple[str, str] = ("", ""),
 ) -> str:
-    """Wrap a message body in a document whose CSP blocks remote subresources."""
+    """Wrap a message body in a document whose CSP blocks remote subresources.
+
+    `font` is the UI's (family, point size), the default for text the message
+    doesn't style, so a plain message reads like the rest of the app.
+    """
     policy = _CSP_WITH_IMAGES if are_remote_images_allowed else _CSP
     style = _BASE_STYLE + (_DARK_STYLE if is_dark else _LIGHT_STYLE)
+    family, size = font
+    if family and size.isdigit():
+        quoted = "".join(char for char in family if char not in '\\"<>{};')
+        style += f'html{{font-family:"{quoted}",sans-serif;font-size:{size}pt}}'
     return (
         '<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" '
         f'content="{policy}"><style>{style}</style></head><body>{html}</body></html>'

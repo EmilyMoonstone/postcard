@@ -4,6 +4,13 @@ from . import mail_sync
 from .avatar_loader import AvatarLoader
 from .core.models.conversation import Conversation
 
+# Adwaita's accent palette, one per account in the order they were added.
+ACCOUNT_COLORS = 8
+
+
+def account_color_class(index: int) -> str:
+    return f"account-color-{index % ACCOUNT_COLORS}"
+
 
 class ConversationRow(Gtk.Box):
     __gtype_name__ = "PostcardConversationRow"
@@ -64,12 +71,14 @@ class ConversationRow(Gtk.Box):
         self._preview_label.add_css_class("dim-label")
         bottom.append(self._preview_label)
 
-        self._account_label = Gtk.Label(
-            xalign=1, ellipsize=Pango.EllipsizeMode.END, max_width_chars=12
-        )
-        self._account_label.add_css_class("dim-label")
-        self._account_label.add_css_class("caption")
-        bottom.append(self._account_label)
+        # Which account a thread arrived on, where several are merged: a dot
+        # in that account's colour, the same one its sidebar row carries.
+        self._account_dot = Gtk.Image.new_from_icon_name("media-record-symbolic")
+        self._account_dot.set_pixel_size(8)
+        self._account_dot.set_valign(Gtk.Align.CENTER)
+        self._account_dot.add_css_class("account-dot")
+        bottom.append(self._account_dot)
+        self._account_color_class = ""
 
         self._unread_dot = Gtk.Image.new_from_icon_name("media-record-symbolic")
         self._unread_dot.set_pixel_size(10)
@@ -82,7 +91,11 @@ class ConversationRow(Gtk.Box):
     # so the row names the recipient instead -- and falls back to the sender for
     # mail that predates the recipient columns.
     def bind(
-        self, conversation: Conversation, is_outgoing: bool, account_label: str
+        self,
+        conversation: Conversation,
+        is_outgoing: bool,
+        account_label: str,
+        account_color: int | None = None,
     ) -> None:
         subject = conversation.subject
         if conversation.count > 1:
@@ -104,8 +117,15 @@ class ConversationRow(Gtk.Box):
         self._date_label.set_label(mail_sync.format_date(conversation.date))
         self._subject_label.set_label(subject)
         self._preview_label.set_label(conversation.preview)
-        self._account_label.set_label(account_label)
-        self._account_label.set_visible(bool(account_label))
+        self._account_dot.set_visible(account_color is not None)
+        self._account_dot.set_tooltip_text(account_label or None)
+        if self._account_color_class:
+            self._account_dot.remove_css_class(self._account_color_class)
+        self._account_color_class = (
+            account_color_class(account_color) if account_color is not None else ""
+        )
+        if self._account_color_class:
+            self._account_dot.add_css_class(self._account_color_class)
         self._unread_dot.set_visible(conversation.is_unread)
 
         # CSS class names, not Python identifiers: they have to match the
