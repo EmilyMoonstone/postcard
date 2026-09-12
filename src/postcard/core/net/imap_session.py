@@ -25,6 +25,7 @@ STATUS_OK = "OK"
 # so both halves have to name them from one place.
 FLAG_SEEN = "\\Seen"
 FLAG_FLAGGED = "\\Flagged"
+FLAG_DRAFT = "\\Draft"
 
 # A LIST attribute, not a message flag: the mailbox is a container that cannot
 # hold mail (Gmail's "[Gmail]"), so it is shown but never selected.
@@ -298,14 +299,14 @@ class ImapSession:
         ones it parsed, so the comparison has to as well."""
         return name.upper() in self._require_imap().capabilities
 
-    def append(self, mailbox: str, raw: bytes) -> None:
+    def append(self, mailbox: str, raw: bytes, flags: str = FLAG_SEEN) -> None:
         """Upload a message into a mailbox, without selecting it first.
 
-        Stored \\Seen: this is our own copy of something we just sent, and
-        arriving as unread mail would be wrong.
+        Stored \\Seen by default: it is our own copy of something we sent or
+        wrote, and arriving as unread mail would be wrong.
         """
         status, payload = self._require_imap().append(
-            _quote_mailbox(mailbox), FLAG_SEEN, None, raw
+            _quote_mailbox(mailbox), flags, None, raw
         )
         if status != STATUS_OK:
             raise ImapError(f"could not append to {mailbox}: {payload}")

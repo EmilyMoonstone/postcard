@@ -55,6 +55,17 @@ def send_mime(session: GraphSession, raw: bytes, recipients: list[str]) -> None:
         _send_as_draft(session, outgoing)
 
 
+def save_draft(session: GraphSession, raw: bytes) -> None:
+    """File raw in the mailbox's Drafts folder, where other clients see it.
+
+    Posting MIME to the messages collection creates a draft, headers and
+    Message-ID intact, which is also what lets the next sync recognise it.
+    """
+    session.request(
+        "POST", "/me/messages", base64.b64encode(raw), content_type=MIME_TYPE
+    )
+
+
 def bcc_recipients(raw: bytes, recipients: list[str]) -> list[str]:
     """The recipients the message's To and Cc headers don't name."""
     headers = email.message_from_bytes(raw, policy=policy.compat32)

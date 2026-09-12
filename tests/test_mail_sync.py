@@ -593,18 +593,21 @@ class AppendingImapSession(FakeImapSession):
     """An IMAP server that records what was appended where."""
 
     appends: list[tuple[str, bytes]] = []
+    flags: list[str] = []
     capabilities: tuple[str, ...] = ()
 
     def has_capability(self, name):
         return name in type(self).capabilities
 
-    def append(self, mailbox, raw):
+    def append(self, mailbox, raw, flags="\\Seen"):
         type(self).appends.append((mailbox, raw))
+        type(self).flags.append(flags)
 
 
 @pytest.fixture
 def imap(monkeypatch):
     AppendingImapSession.appends = []
+    AppendingImapSession.flags = []
     AppendingImapSession.mailboxes = mailboxes("INBOX", "[Gmail]/Sent Mail")
     AppendingImapSession.capabilities = ()
     monkeypatch.setattr(mail_sync, "SmtpSession", FakeSmtpSession)
@@ -1088,3 +1091,34 @@ def test_unread_counts_cover_folders_only_a_special_use_attribute_names(monkeypa
     result = fetch_mailbox(account(), CREDENTIAL)
 
     assert result.unread_counts == {"Papierkorb": 4}
+
+
+# --- drafts on the server --------------------------------------------------------
+
+
+def test_a_draft_is_appended_to_the_drafts_mailbox_as_a_draft(imap):
+    imap.mailboxes = [
+        MailboxInfo("INBOX", "/", ""),
+        MailboxInfo("Entwürfe", "/", "\\Drafts", role="drafts"),
+    ]
+
+    mail_sync.save_draft(account(), CREDENTIAL, b"Subject: x\n\nbody", ["eve@x"])
+
+    assert imap.appends == [("Entwürfe", b"Bcc: eve@x\nSubject: x\n\nbody")]
+    assert imap.flags == ["\\Draft \\Seen"]
+
+
+def test_a_server_without_a_drafts_mailbox_keeps_the_draft_local(imap):
+    imap.mailboxes = mailboxes("INBOX")
+
+    mail_sync.save_draft(account(), CREDENTIAL, b"raw", [])
+
+    assert imap.appends == []
+
+
+def test_a_graph_draft_goes_to_graph(graph):
+    graph.save_draft = lambda session, raw: graph.calls.append(("draft", raw))
+
+    mail_sync.save_draft(graph_account(), GRAPH_TOKEN, b"raw", [])
+
+    assert graph.calls == [("draft", b"raw")]

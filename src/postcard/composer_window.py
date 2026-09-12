@@ -471,6 +471,7 @@ class PostcardComposerWindow(Adw.Window):
             recipient, recipient_address = mail_sync.first_recipient(
                 self.to_row.get_text()
             )
+            raw = msg.as_bytes()
             row = self._db.save_email(
                 folder.id,
                 sender=self._recipients_display(),
@@ -480,8 +481,18 @@ class PostcardComposerWindow(Adw.Window):
                 preview=self._preview_text()[:100],
                 date=_now(),
                 is_unread=False,
+                message_id=compose.message_id(raw),
             )
-            self._db.save_raw_message(row.id, msg.as_bytes())
+            self._db.save_raw_message(row.id, raw)
+            self._db.save_bcc(row.id, self._bcc_addrs())
+            # Module-level, not a method: the composer closes right below, and
+            # the upload has nothing to tell it. The local row stays either way,
+            # and the next sync of Drafts matches it to the uploaded copy.
+            threading.Thread(
+                target=_upload_draft,
+                args=(self._account, raw, self._bcc_addrs()),
+                daemon=True,
+            ).start()
             self.emit("finished")
 
         self.close()
@@ -615,6 +626,24 @@ class PostcardComposerWindow(Adw.Window):
             self.send_spinner.start()
         else:
             self.send_spinner.stop()
+
+
+# Runs on a worker thread: network only, no Gtk/database access.
+def _upload_draft(account: Account, raw: bytes, bcc: list[str]) -> None:
+    credential = secrets.credential_for(account)
+    if credential is None:
+        logger.warning(
+            "could not sign in to %s; the draft stays on this machine", account.email
+        )
+        return
+    try:
+        mail_sync.save_draft(account, credential, raw, bcc)
+    except Exception:
+        logger.warning(
+            "could not save a draft to the server (account %s); it stays local",
+            account.email,
+            exc_info=True,
+        )
 
 
 def _now() -> str:

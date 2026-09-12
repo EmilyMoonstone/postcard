@@ -21,9 +21,12 @@ from .core.models.folder import Folder, FolderRole
 from .core.models.message_header import MessageHeader
 from .core.net import graph_folders, graph_messages, graph_send
 from .core.net.auth import Credential
+from .core.net.graph_send import with_bcc
 from .core.net.graph_session import GraphSession
 from .core.net.imap_session import (
     ATTR_NOSELECT,
+    FLAG_DRAFT,
+    FLAG_SEEN,
     GMAIL_CAPABILITY,
     FetchedHeader,
     ImapError,
@@ -492,6 +495,37 @@ def send_message(
             account.email,
             exc_info=True,
         )
+
+
+def save_draft(
+    account: Account, credential: Credential, raw: bytes, bcc: list[str]
+) -> None:
+    """Put a draft on the server, so it isn't only on this machine.
+
+    Bcc goes into the uploaded copy's headers: a draft is only ever seen by
+    its author, and without it reopening the draft elsewhere loses them.
+    """
+    raw = with_bcc(raw, bcc)
+    if account.is_graph:
+        graph_send.save_draft(GraphSession(credential), raw)
+        return
+    with _pooled_session(account, credential) as session:
+        drafts = next(
+            (
+                mailbox.name
+                for mailbox in session.list_folders()
+                if mailbox_role(mailbox) is FolderRole.DRAFTS
+            ),
+            None,
+        )
+        if drafts is None:
+            logger.warning(
+                "no Drafts mailbox on %s (account %s); the draft stays local",
+                account.imap_host,
+                account.email,
+            )
+            return
+        session.append(drafts, raw, f"{FLAG_DRAFT} {FLAG_SEEN}")
 
 
 class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
