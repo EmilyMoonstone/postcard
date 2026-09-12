@@ -24,7 +24,7 @@ from ..models.signature import Signature
 _EMAIL_COLUMNS = """
     id, folder_id, server_id, sender, sender_address, recipient,
     recipient_address, subject, preview, date, unread, starred, message_id,
-    in_reply_to, reference_ids, conversation_id, category, is_priority
+    in_reply_to, reference_ids, conversation_id, category, is_pinned
 """
 
 
@@ -137,6 +137,23 @@ MIGRATIONS = [
         name TEXT NOT NULL,
         body TEXT NOT NULL
     );
+    """,
+    # Pinning, apart from priority: priority marks a thread where it is, a pin
+    # keeps it at the top of the inbox.
+    "ALTER TABLE emails ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0",
+    # Priority merged into the star, which the server keeps. Threads marked
+    # priority locally become flagged: locally now, on the server through the
+    # offline queue the next sync replays first. is_priority stays, unused.
+    """
+    INSERT INTO pending_actions (account_id, kind, folder_name, uids, flag, should_add)
+    SELECT folders.account_id, 'flag', folders.name,
+        group_concat(emails.server_id, char(10)), '\\Flagged', 1
+    FROM emails JOIN folders ON folders.id = emails.folder_id
+    WHERE emails.is_priority = 1 AND emails.starred = 0
+        AND emails.server_id IS NOT NULL AND emails.server_id != ''
+    GROUP BY folders.id;
+    UPDATE emails SET starred = 1 WHERE is_priority = 1;
+    UPDATE emails SET is_priority = 0;
     """,
 ]
 
@@ -909,7 +926,7 @@ class Database:
             references=row["reference_ids"] or "",
             conversation_id=row["conversation_id"],
             category=row["category"],
-            is_priority=bool(row["is_priority"]),
+            is_pinned=bool(row["is_pinned"]),
         )
 
     # --- signatures ----------------------------------------------------------
@@ -976,10 +993,10 @@ class Database:
                 (category, address),
             )
 
-    def set_priority(self, email_ids: Sequence[int], is_priority: bool) -> None:
+    def set_pinned(self, email_ids: Sequence[int], is_pinned: bool) -> None:
         self._conn.executemany(
-            "UPDATE emails SET is_priority = ? WHERE id = ?",
-            [(int(is_priority), email_id) for email_id in email_ids],
+            "UPDATE emails SET is_pinned = ? WHERE id = ?",
+            [(int(is_pinned), email_id) for email_id in email_ids],
         )
         self._conn.commit()
 

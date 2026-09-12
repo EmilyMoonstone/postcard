@@ -13,3 +13,12 @@ def test_a_long_item_is_shortened_and_underscores_are_not_mnemonics():
 
     assert label.startswith("snake__case — ")
     assert label.endswith("…")
+
+
+def test_bundle_senders_are_short():
+    rows = pytest.importorskip("postcard.inbox_rows")
+
+    assert rows.short_sender(
+        "caritasmuenchen-jobnotification@noreply12.jobs2web.com"
+    ) == ("caritasmuenchen-jobno…")
+    assert rows.short_sender("ChatGPT") == "ChatGPT"

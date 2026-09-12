@@ -21,6 +21,7 @@ from .account_dialog import PostcardAccountDialog
 from .accounts_dialog import PostcardAccountsDialog
 from .avatar_loader import AvatarLoader
 from .composer_window import PostcardComposerWindow, composer_for_mailto
+from .conversation_row import account_color_class
 from .core import compose, secrets, smart_inbox
 from .core.categories import CATEGORIES
 from .core.mime.invitation import Invitation
@@ -140,12 +141,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     inbox_view_button: Gtk.MenuButton = Gtk.Template.Child()
     inbox_title: Adw.WindowTitle = Gtk.Template.Child()
     priority_button: Gtk.Button = Gtk.Template.Child()
+    pin_button: Gtk.Button = Gtk.Template.Child()
     compose_button: Gtk.Button = Gtk.Template.Child()
     reply_all_button: Gtk.Button = Gtk.Template.Child()
     reply_button: Gtk.Button = Gtk.Template.Child()
     forward_button: Gtk.Button = Gtk.Template.Child()
     mark_read_button: Gtk.Button = Gtk.Template.Child()
-    star_button: Gtk.Button = Gtk.Template.Child()
     archive_button: Gtk.Button = Gtk.Template.Child()
     archive_button_content: Adw.ButtonContent = Gtk.Template.Child()
     move_button: Gtk.MenuButton = Gtk.Template.Child()
@@ -326,7 +327,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._folder_rows: dict[int, FolderRow] = {}
         # What each bound row was given beyond its folder: the account label it
         # shows under a group, and whether it is that account's inbox row.
-        self._folder_row_labels: dict[int, tuple[str | None, bool]] = {}
+        self._folder_row_labels: dict[int, tuple[str | None, bool, str]] = {}
         # Each account's inbox row, so its sync spinner can start and stop.
         self._account_rows: dict[int, FolderRow] = {}
         # The account ids and (id, parent_id, role) of the folders the tree was
@@ -350,7 +351,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             )
             for group_id, role, icon, label in (
                 (ALL_INBOXES_ID, "inbox", "mail-unread-symbolic", _("Inbox")),
-                (STARRED_ID, "starred", "starred-symbolic", _("Starred")),
+                (
+                    STARRED_ID,
+                    "starred",
+                    "mail-mark-important-symbolic",
+                    _("Priority"),
+                ),
                 (ALL_DRAFTS_ID, "drafts", "document-edit-symbolic", _("Drafts")),
                 (ALL_SENT_ID, "sent", "mail-send-symbolic", _("Sent")),
                 (ALL_TRASH_ID, "trash", "user-trash-symbolic", _("Trash")),
@@ -725,7 +731,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
-            ("toggle-priority", self._on_toggle_priority),
+            ("toggle-pin", self._on_toggle_pin),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
             ("compose", self._on_compose_clicked),
@@ -750,8 +756,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         if app is not None:
             for name, accels in (
                 ("win.toggle-read", ["<ctrl>i"]),
-                ("win.toggle-star", ["<ctrl>s"]),
-                ("win.toggle-priority", ["<ctrl>p"]),
+                ("win.toggle-star", ["<ctrl>s", "<ctrl>p"]),
+                ("win.toggle-pin", ["<ctrl><shift>p"]),
                 ("win.archive", ["<ctrl>e"]),
                 ("win.trash", ["<ctrl>Delete"]),
                 ("win.compose", ["<ctrl>n"]),
@@ -843,17 +849,17 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 imap_session.FLAG_FLAGGED,
             )
 
-    # Priority is the user's alone: never inferred, and kept on this machine,
-    # since no mail server has a flag that means it.
-    def _on_toggle_priority(self, _action: Gio.SimpleAction, _param: object) -> None:
+    # A pin keeps a thread at the top of the inbox; like priority it is the
+    # user's alone and stays on this machine.
+    def _on_toggle_pin(self, _action: Gio.SimpleAction, _param: object) -> None:
         conversations = self._selected_conversations()
         if not conversations:
             return
-        is_priority = not all(item.is_priority for item in conversations)
+        is_pinned = not all(item.is_pinned for item in conversations)
         mails = [mail for conversation in conversations for mail in conversation.emails]
-        self._db.set_priority([mail.id for mail in mails], is_priority)
+        self._db.set_pinned([mail.id for mail in mails], is_pinned)
         for mail in mails:
-            mail.is_priority = is_priority
+            mail.is_pinned = is_pinned
         self._after_flag_change(conversations)
 
     # Files every mail from the selection's senders under a category, now and
@@ -1120,7 +1126,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
-            ("toggle-priority", self._on_toggle_priority),
+            ("toggle-pin", self._on_toggle_pin),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
         ):
@@ -1140,15 +1146,17 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             if any(item.is_unread for item in selected)
             else _("Mark Unread")
         )
-        star = _("Unstar") if any(item.is_starred for item in selected) else _("Star")
         priority = (
             _("Remove Priority")
-            if all(item.is_priority for item in selected)
+            if any(item.is_starred for item in selected)
             else _("Mark as Priority")
         )
         flags.append(read, "context.toggle-read")
-        flags.append(star, "context.toggle-star")
-        flags.append(priority, "context.toggle-priority")
+        flags.append(priority, "context.toggle-star")
+        pin = (
+            _("Unpin") if all(item.is_pinned for item in selected) else _("Pin to Top")
+        )
+        flags.append(pin, "context.toggle-pin")
         menu.append_section(None, flags)
 
         categories = Gio.Menu()
@@ -1582,7 +1590,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     def _group_members(self, group: Folder) -> list[Folder]:
         """Every account's folder of a group's role, in account order.
 
-        Starred gathers messages, not folders, so it has none. A role folder
+        Priority gathers flagged messages, not folders, so it has none. A role folder
         nested inside another of the same role shows under its parent instead.
         """
         if group.id == STARRED_ID:
@@ -1677,14 +1685,19 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         group = parent.get_item() if parent is not None else None
         label = None
         is_account_inbox = False
+        color_class = ""
         if isinstance(group, Folder) and group.id < 0:
             # Under a group, a folder is told apart by its account.
             account = self._accounts.get(entry.account_id)
             label = self._account_label(account) if account is not None else None
             is_account_inbox = group.id == ALL_INBOXES_ID
+            if len(self._accounts) > 1:
+                color_class = account_color_class(self._account_color(entry.account_id))
         self._folder_rows[entry.id] = row
-        self._folder_row_labels[entry.id] = (label, is_account_inbox)
-        row.bind(entry, self._unread_badge(entry), label, is_account_inbox)
+        self._folder_row_labels[entry.id] = (label, is_account_inbox, color_class)
+        row.bind(
+            entry, self._sidebar_badge(entry), label, is_account_inbox, color_class
+        )
         if is_account_inbox:
             self._account_rows[entry.account_id] = row
             row.set_syncing(entry.account_id in self._syncing_account_ids)
@@ -1789,6 +1802,23 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         return (
             self._current_folder is not None and self._current_folder.id == STARRED_ID
         )
+
+    def _account_color(self, account_id: int) -> int:
+        """An account's colour index: its place among the accounts."""
+        ids = list(self._accounts)
+        return ids.index(account_id) if account_id in ids else 0
+
+    # Unread counts of mail nobody reads as new -- sent, drafted, deleted or
+    # junk -- are noise in the sidebar, as Spark has it.
+    def _sidebar_badge(self, folder: Folder) -> int:
+        if mail_sync.folder_role(folder) in (
+            mail_sync.FolderRole.SENT,
+            mail_sync.FolderRole.DRAFTS,
+            mail_sync.FolderRole.TRASH,
+            mail_sync.FolderRole.JUNK,
+        ):
+            return 0
+        return self._unread_badge(folder)
 
     def _unread_badge(self, folder: Folder) -> int:
         """What the sidebar shows next to a folder.
@@ -1961,10 +1991,16 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             row = self._folder_rows.get(folder.id)
             if row is None:
                 continue
-            label, is_account_inbox = self._folder_row_labels.get(
-                folder.id, (None, False)
+            label, is_account_inbox, color_class = self._folder_row_labels.get(
+                folder.id, (None, False, "")
             )
-            row.bind(folder, self._unread_badge(folder), label, is_account_inbox)
+            row.bind(
+                folder,
+                self._sidebar_badge(folder),
+                label,
+                is_account_inbox,
+                color_class,
+            )
             if is_account_inbox:
                 row.set_syncing(folder.account_id in self._syncing_account_ids)
 
@@ -2066,7 +2102,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         """The conversations on screen, narrowed by the search box and filter."""
         query = self.search_entry.get_text().strip()
         if self._is_starred_view():
-            # Starred mail lives in any folder of any account.
+            # Priority (flagged) mail lives in any folder of any account.
             every_folder = list(self._folders_by_id)
             matches = [
                 conversation
@@ -2405,12 +2441,14 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 return
             assert isinstance(entry, Conversation)
             account, folder = self._origin(entry.latest) or (None, None)
+            is_unified = account is not None and self._is_unified()
             row.show_conversation(
                 entry,
                 is_outgoing=folder is not None and mail_sync.is_outgoing(folder),
-                account_label=account.short_label
-                if account is not None and self._is_unified()
-                else "",
+                account_label=account.email if account is not None else "",
+                account_color=self._account_color(account.id)
+                if is_unified and account is not None and len(self._accounts) > 1
+                else None,
             )
 
         factory.connect("setup", on_setup)
@@ -2493,19 +2531,21 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self.mark_read_button.set_icon_name("mail-unread-symbolic")
             self.mark_read_button.set_tooltip_text(_("Mark Unread"))
 
+        # Priority is the server's flag, so a mixed selection reads as flagged
+        # the same way toggling does: any flagged thread means "remove".
         if any(conversation.is_starred for conversation in selected):
-            self.star_button.set_icon_name("starred-symbolic")
-            self.star_button.set_tooltip_text(_("Unstar"))
-        else:
-            self.star_button.set_icon_name("non-starred-symbolic")
-            self.star_button.set_tooltip_text(_("Star"))
-
-        if all(conversation.is_priority for conversation in selected):
             self.priority_button.set_tooltip_text(_("Remove Priority"))
             self.priority_button.add_css_class("accent")
         else:
             self.priority_button.set_tooltip_text(_("Mark as Priority"))
             self.priority_button.remove_css_class("accent")
+
+        if all(conversation.is_pinned for conversation in selected):
+            self.pin_button.set_tooltip_text(_("Unpin"))
+            self.pin_button.add_css_class("accent")
+        else:
+            self.pin_button.set_tooltip_text(_("Pin to Top"))
+            self.pin_button.remove_css_class("accent")
 
     # Empty the reading pane, releasing each view's WebView as it goes.
     def _clear_thread(self) -> None:

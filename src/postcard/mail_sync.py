@@ -968,6 +968,25 @@ def _iso_date(value: str) -> str:
         return value
 
 
+def format_full_date(value: str) -> str:
+    """A timestamp as the reader shows it: the day and the time, in full.
+
+    "Today 10:00", "Yesterday 18:42", or "Thu, Sep 10 2026, 14:32" further back.
+    Unparseable values pass through, as in format_date.
+    """
+    try:
+        moment = datetime.fromisoformat(value).astimezone()
+    except (TypeError, ValueError):
+        return value
+    days = (date.today() - moment.date()).days
+    time = moment.strftime("%H:%M")
+    if days == 0:
+        return _("Today {time}").format(time=time)
+    if days == 1:
+        return _("Yesterday {time}").format(time=time)
+    return moment.strftime("%a, %b %d %Y, %H:%M")
+
+
 def format_date(value: str) -> str:
     """Render a stored timestamp as the short label the list and reader show.
 

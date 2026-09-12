@@ -1,7 +1,7 @@
 """The rows of a smart inbox: sections, bundles and conversations.
 
 Pure layout, no widgets: given the conversations a folder view shows, decide
-what goes in the Priority section, which mail folds into a bundle row
+what goes in the Pinned section, which mail folds into a bundle row
 ("Newsletter 36", or a whole account the user chose to see as one), and where
 the date sections break. The window puts the result in its list store as is.
 """
@@ -25,7 +25,7 @@ VIEW_CATEGORY = "category"
 VIEW_DATE = "date"
 VIEWS = (VIEW_IMPORTANCE, VIEW_CATEGORY, VIEW_DATE)
 
-SECTION_PRIORITY = "priority"
+SECTION_PINNED = "pinned"
 SECTION_TODAY = "today"
 SECTION_YESTERDAY = "yesterday"
 SECTION_THIS_WEEK = "this-week"
@@ -151,8 +151,11 @@ def bundle_key(
     """The bundle a conversation folds into, or None to list it on its own.
 
     A bundled account takes all its mail, whatever the category: that is what
-    choosing to see the account as one row means.
+    choosing to see the account as one row means. A pinned or priority thread
+    never folds away: the user marked it to be seen.
     """
+    if conversation.is_pinned or conversation.is_starred:
+        return None
     account_id = account_of(conversation)
     if account_id is not None and account_id in bundled_accounts:
         return f"{BUNDLE_ACCOUNT}:{account_id}"
@@ -168,19 +171,18 @@ def build(
     bundled_accounts: set[int],
     today: date,
 ) -> list[GObject.Object]:
-    """The rows of an inbox in one of the three views."""
+    """The rows of an inbox in one of the three views, pinned threads on top."""
     ordered = sorted(conversations, key=lambda c: timestamp(c.date), reverse=True)
-    if view == VIEW_DATE:
-        return _by_date(ordered, today)
-
-    priority = [conversation for conversation in ordered if conversation.is_priority]
-    rest = [conversation for conversation in ordered if not conversation.is_priority]
+    pinned = [conversation for conversation in ordered if conversation.is_pinned]
+    rest = [conversation for conversation in ordered if not conversation.is_pinned]
     rows: list[GObject.Object] = []
-    if priority:
-        rows.append(InboxSection(SECTION_PRIORITY))
-        rows.extend(priority)
+    if pinned:
+        rows.append(InboxSection(SECTION_PINNED))
+        rows.extend(pinned)
 
-    if view == VIEW_CATEGORY:
+    if view == VIEW_DATE:
+        rows.extend(_by_date(rest, today))
+    elif view == VIEW_CATEGORY:
         rows.extend(_by_category(rest, account_of, bundled_accounts))
     else:
         rows.extend(_with_bundles(rest, account_of, bundled_accounts, today))
@@ -198,8 +200,7 @@ def open_bundle(
     members = [
         conversation
         for conversation in conversations
-        if not conversation.is_priority
-        and bundle_key(conversation, account_of, bundled_accounts) == key
+        if bundle_key(conversation, account_of, bundled_accounts) == key
     ]
     members.sort(key=lambda c: timestamp(c.date), reverse=True)
     return _by_date(members, today)

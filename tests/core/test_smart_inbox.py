@@ -62,11 +62,11 @@ def test_date_sections_follow_the_calendar():
     assert date_section("2025-12-24T08:00:00", TODAY) == "year:2025"
 
 
-def test_importance_puts_priority_first_and_folds_categories_into_bundles():
+def test_importance_folds_categories_into_bundles_and_leaves_priority_in_place():
     rows = build(
         [
             thread("2026-09-12", category="newsletter"),
-            thread("2026-09-10", is_priority=True),
+            thread("2026-09-10", is_starred=True, category="newsletter"),
             thread("2026-09-12"),
             thread("2026-09-11", category="newsletter"),
             thread("2026-09-11", category="notification"),
@@ -78,14 +78,26 @@ def test_importance_puts_priority_first_and_folds_categories_into_bundles():
     )
 
     assert shape(rows) == [
-        "# priority",
-        "people 2026-09-10",
         "# today",
         "[category:newsletter 2]",
         "people 2026-09-12",
         "# yesterday",
         "[category:notification 1]",
+        "# this-week",
+        "newsletter 2026-09-10",
     ]
+
+
+def test_pinned_threads_sit_on_top_in_every_view():
+    conversations = [
+        thread("2026-09-12"),
+        thread("2026-09-01", category="newsletter", is_pinned=True),
+    ]
+
+    for view in (VIEW_IMPORTANCE, VIEW_CATEGORY, VIEW_DATE):
+        rows = build(conversations, view, account_of, set(), TODAY)
+        assert shape(rows)[:2] == ["# pinned", "newsletter 2026-09-01"], view
+        assert shape(rows).count("newsletter 2026-09-01") == 1
 
 
 def test_a_bundled_account_takes_all_its_mail_whatever_the_category():
@@ -94,7 +106,7 @@ def test_a_bundled_account_takes_all_its_mail_whatever_the_category():
             thread("2026-09-12", account=2),
             thread("2026-09-12", account=2, category="newsletter"),
             thread("2026-09-12", account=1, category="newsletter"),
-            thread("2026-09-12", account=2, is_priority=True),
+            thread("2026-09-12", account=2, is_starred=True),
         ],
         VIEW_IMPORTANCE,
         account_of,
@@ -103,11 +115,10 @@ def test_a_bundled_account_takes_all_its_mail_whatever_the_category():
     )
 
     assert shape(rows) == [
-        "# priority",
-        "people 2026-09-12",
         "# today",
         "[account:2 2]",
         "[category:newsletter 1]",
+        "people 2026-09-12",
     ]
 
 
@@ -136,10 +147,10 @@ def test_the_category_view_lists_every_thread_under_its_category():
     ]
 
 
-def test_the_date_view_has_no_bundles_and_no_priority_section():
+def test_the_date_view_has_no_bundles():
     rows = build(
         [
-            thread("2026-09-11", category="newsletter", is_priority=True),
+            thread("2026-09-11", category="newsletter", is_starred=True),
             thread("2026-09-12", category="newsletter"),
         ],
         VIEW_DATE,
@@ -161,7 +172,7 @@ def test_an_opened_bundle_lists_its_threads_by_date():
         thread("2026-09-01", category="newsletter"),
         thread("2026-09-12", category="newsletter"),
         thread("2026-09-12"),
-        thread("2026-09-11", category="newsletter", is_priority=True),
+        thread("2026-09-11", category="newsletter", is_starred=True),
     ]
 
     rows = open_bundle(conversations, "category:newsletter", account_of, set(), TODAY)

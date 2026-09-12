@@ -826,14 +826,38 @@ def test_a_row_stored_before_sorting_gets_sorted_on_the_next_sync(db, folder):
     assert db.emails_in_folder(folder.id)[0].category == "newsletter"
 
 
-def test_priority_is_set_and_cleared_per_email(db, folder):
-    incoming(db, folder.id, "1")
-    [mail] = db.emails_in_folder(folder.id)
+def test_local_priority_becomes_the_server_flag_on_upgrade(tmp_path):
+    import sqlite3
 
-    db.set_priority([mail.id], True)
-    assert db.emails_in_folder(folder.id)[0].is_priority is True
-    db.set_priority([mail.id], False)
-    assert db.emails_in_folder(folder.id)[0].is_priority is False
+    path = tmp_path / "old.db"
+    old = Database(str(path))
+    account = old.save_account("a@x", "A", "imap.x", 993, "smtp.x", 465)
+    inbox = old.get_or_create_folder(account.id, "INBOX")
+    incoming(old, inbox.id, "7")
+    incoming(old, inbox.id, "8")
+    old.close()
+    # Put the file back to before the merge, with thread 7 marked locally.
+    conn = sqlite3.connect(path)
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.execute("UPDATE emails SET is_priority = 1 WHERE server_id = '7'")
+    conn.execute(f"PRAGMA user_version = {version - 1}")
+    conn.commit()
+    conn.close()
+
+    upgraded = Database(str(path))
+
+    starred = {
+        mail.server_id: mail.is_starred for mail in upgraded.emails_in_folder(inbox.id)
+    }
+    assert starred == {"7": True, "8": False}
+    [queued] = upgraded.pending_actions(account.id)
+    assert (queued.folder_name, queued.uids, queued.flag, queued.should_add) == (
+        "INBOX",
+        ("7",),
+        "\\Flagged",
+        True,
+    )
+    upgraded.close()
 
 
 def test_an_account_can_be_bundled(db, folder):
@@ -911,3 +935,13 @@ def test_latest_emails_are_the_newest_synced_messages_across_folders(db, folder)
     latest = db.latest_emails([folder.id, archive.id], limit=2)
 
     assert [mail.subject for mail in latest] == ["New", "Middle"]
+
+
+def test_pinning_is_set_and_cleared_per_email(db, folder):
+    incoming(db, folder.id, "1")
+    [mail] = db.emails_in_folder(folder.id)
+
+    db.set_pinned([mail.id], True)
+    assert db.emails_in_folder(folder.id)[0].is_pinned is True
+    db.set_pinned([mail.id], False)
+    assert db.emails_in_folder(folder.id)[0].is_pinned is False

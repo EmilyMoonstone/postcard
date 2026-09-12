@@ -34,6 +34,7 @@ class FolderRow(Gtk.Box):
         self._badge = Gtk.Label()
         self._badge.add_css_class("dim-label")
         self.append(self._badge)
+        self._color_class = ""
 
     # Fill this row from a folder. Called every time the row is (re)used.
     # `label` stands in for the folder's own name where the sidebar lists a
@@ -44,15 +45,24 @@ class FolderRow(Gtk.Box):
         unread_count: int,
         label: str | None = None,
         is_syncable: bool = False,
+        color_class: str = "",
     ) -> None:
         self._icon.set_visible(True)
         self._icon.set_from_icon_name(folder.icon_name)
+        self._set_icon_color(color_class)
         self._name_label.set_label(label or mail_sync.folder_label(folder))
         self._name_label.remove_css_class("sidebar-heading")
         self._spinner_slot.set_visible(is_syncable)
         self.set_syncing(False)
         self._badge.set_label(str(unread_count))
         self._badge.set_visible(unread_count > 0)
+
+    def _set_icon_color(self, color_class: str) -> None:
+        if self._color_class:
+            self._icon.remove_css_class(self._color_class)
+        self._color_class = color_class
+        if color_class:
+            self._icon.add_css_class(color_class)
 
     # A section title between the groups, like Spark's "Ordner".
     def bind_heading(self, label: str) -> None:

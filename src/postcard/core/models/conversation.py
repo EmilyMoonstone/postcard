@@ -38,13 +38,15 @@ class Conversation(GObject.Object):
     def is_unread(self) -> bool:
         return any(mail.is_unread for mail in self.emails)
 
+    # The server's flag (IMAP \\Flagged, Graph's flag), which the UI calls
+    # priority: one mark, the same in every other mail client.
     @property
     def is_starred(self) -> bool:
         return any(mail.is_starred for mail in self.emails)
 
     @property
-    def is_priority(self) -> bool:
-        return any(mail.is_priority for mail in self.emails)
+    def is_pinned(self) -> bool:
+        return any(mail.is_pinned for mail in self.emails)
 
     @property
     def category(self) -> str:
