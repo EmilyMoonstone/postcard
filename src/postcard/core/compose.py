@@ -148,6 +148,11 @@ def build_mime_message(
     return msg
 
 
+def message_id(raw: bytes) -> str:
+    """A stored message's Message-ID, "" when it has none."""
+    return str(email.message_from_bytes(raw)["Message-ID"] or "").strip()
+
+
 def extract_recipients(raw: bytes) -> list[str]:
     """Read the To/Cc headers back out of a stored message, for retrying from
     Outbox. Bcc addresses are never written to the stored message, so a Bcc'd

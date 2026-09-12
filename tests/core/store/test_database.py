@@ -645,3 +645,56 @@ def test_arrival_key_orders_opaque_graph_ids_by_date():
     newer = _email(server_id="AAMkB=", date="2026-09-02T08:00:00+00:00")
 
     assert _arrival_key(older) < _arrival_key(newer)
+
+
+# --- local copies of sent mail ------------------------------------------------
+
+
+def local_sent_copy(db, folder_id, message_id="<m1@example.com>"):
+    row = db.save_email(
+        folder_id,
+        sender="me@example.com",
+        subject="Hello",
+        preview="Hello",
+        date="2026-09-12T10:00:00+02:00",
+        is_unread=False,
+        message_id=message_id,
+    )
+    db.save_raw_message(row.id, b"Message-ID: <m1@example.com>\n\nbody")
+    return row
+
+
+def test_the_server_copy_of_a_sent_message_takes_over_the_local_one(db, folder):
+    local = local_sent_copy(db, folder.id)
+
+    is_new = incoming(
+        db, folder.id, "42", message_id="<m1@example.com>", is_unread=False
+    )
+
+    [stored] = db.emails_in_folder(folder.id)
+    assert is_new is False
+    assert (stored.id, stored.server_id) == (local.id, "42")
+    assert db.get_raw_message(stored.id) == b"Message-ID: <m1@example.com>\n\nbody"
+
+
+def test_a_message_with_another_message_id_is_stored_beside_the_local_copy(db, folder):
+    local_sent_copy(db, folder.id)
+
+    assert incoming(db, folder.id, "43", message_id="<other@example.com>") is True
+    assert len(db.emails_in_folder(folder.id)) == 2
+
+
+def test_a_header_without_a_message_id_adopts_nothing(db, folder):
+    local_sent_copy(db, folder.id, message_id="")
+
+    assert incoming(db, folder.id, "44", message_id="") is True
+    assert len(db.emails_in_folder(folder.id)) == 2
+
+
+def test_a_copy_already_matched_to_a_server_row_is_not_adopted_twice(db, folder):
+    local_sent_copy(db, folder.id)
+    incoming(db, folder.id, "42", message_id="<m1@example.com>")
+
+    # The same UID again is an ordinary flag update, not a second adoption.
+    assert incoming(db, folder.id, "42", message_id="<m1@example.com>") is False
+    assert [mail.server_id for mail in db.emails_in_folder(folder.id)] == ["42"]

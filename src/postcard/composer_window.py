@@ -587,6 +587,7 @@ class PostcardComposerWindow(Adw.Window):
             preview=subject,
             date=_now(),
             is_unread=False,
+            message_id=compose.message_id(raw),
         )
         self._db.save_raw_message(row.id, raw)
         self.emit("finished")

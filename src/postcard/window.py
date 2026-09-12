@@ -2272,6 +2272,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 preview=result.subject,
                 date=datetime.now().astimezone().isoformat(),
                 is_unread=False,
+                message_id=compose.message_id(result.raw),
             )
             self._db.save_raw_message(row.id, result.raw)
             self._db.delete_email(result.email_id)

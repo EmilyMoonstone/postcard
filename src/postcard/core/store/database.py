@@ -594,13 +594,14 @@ class Database:
         sender_address: str = "",
         recipient: str = "",
         recipient_address: str = "",
+        message_id: str = "",
     ) -> Email:
         cursor = self._conn.execute(
             """
             INSERT INTO emails
                 (folder_id, server_id, sender, subject, preview, date, unread,
-                 sender_address, recipient, recipient_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 sender_address, recipient, recipient_address, message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 folder_id,
@@ -613,6 +614,7 @@ class Database:
                 sender_address,
                 recipient,
                 recipient_address,
+                message_id,
             ),
         )
         self._conn.commit()
@@ -635,6 +637,8 @@ class Database:
             "SELECT message_id FROM emails WHERE folder_id = ? AND server_id = ?",
             (folder_id, header.uid),
         ).fetchone()
+        if row is None and self._adopt_local_copy(folder_id, header):
+            return False
         is_new = row is None
         if row is not None and (row["message_id"] or "") != (header.message_id or ""):
             # Another message at the same UID (a mailbox that reset its UIDs).
@@ -676,6 +680,46 @@ class Database:
         )
         self._conn.commit()
         return is_new
+
+    def _adopt_local_copy(self, folder_id: int, header: MessageHeader) -> bool:
+        """Give a locally saved copy the server id of the message it stands for.
+
+        Sending saves a copy to Sent before the server has one, and a sync then
+        brings the server's own copy. Inserting that as a new row left the local
+        one beside it for good -- prune only drops rows with a server id. Taking
+        the local row over instead also keeps the body it already has cached.
+        Returns False when there is no such copy, or the header has no
+        Message-ID to recognise it by.
+        """
+        if not header.message_id:
+            return False
+        local = self._conn.execute(
+            """
+            SELECT id FROM emails
+            WHERE folder_id = ? AND server_id IS NULL AND message_id = ?
+            ORDER BY id LIMIT 1
+            """,
+            (folder_id, header.message_id),
+        ).fetchone()
+        if local is None:
+            return False
+        self._conn.execute(
+            """
+            UPDATE emails SET server_id = ?, unread = ?, starred = ?,
+                in_reply_to = ?, reference_ids = ?
+            WHERE id = ?
+            """,
+            (
+                header.uid,
+                int(header.is_unread),
+                int(header.is_starred),
+                header.in_reply_to,
+                header.references,
+                local["id"],
+            ),
+        )
+        self._conn.commit()
+        return True
 
     def delete_email(self, email_id: int) -> None:
         self._conn.execute("DELETE FROM emails WHERE id = ?", (email_id,))

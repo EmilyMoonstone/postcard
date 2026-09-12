@@ -6,6 +6,7 @@ from postcard.core.compose import (
     forward_body,
     forward_subject,
     html_to_text,
+    message_id,
     parse_mailto,
     quote_reply_body,
     replace_last_address,
@@ -261,3 +262,8 @@ def test_parse_mailto_merges_path_and_query_recipients():
     draft = parse_mailto("mailto:bob@x.com?to=carl@x.com&SUBJECT=Hi")
     assert draft.to == "bob@x.com, carl@x.com"
     assert draft.subject == "Hi"
+
+
+def test_message_id_reads_a_stored_message_s_header():
+    assert message_id(b"Message-ID: <a@b>\n\nbody") == "<a@b>"
+    assert message_id(b"Subject: x\n\nbody") == ""
