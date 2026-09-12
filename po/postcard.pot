@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: postcard\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-13 00:29+0200\n"
+"POT-Creation-Date: 2026-09-13 00:45+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -113,47 +113,57 @@ msgid ""
 "date only."
 msgstr ""
 
-#: data/in.gxanshu.postcard.gschema.xml:52
-msgid "Sync interval in minutes"
+#: data/in.gxanshu.postcard.gschema.xml:51
+msgid "Get new mail instantly"
 msgstr ""
 
-#: data/in.gxanshu.postcard.gschema.xml:53
-msgid "How often to check for new mail. Set to 0 to check manually only."
+#: data/in.gxanshu.postcard.gschema.xml:52
+msgid ""
+"Keep a connection open so the server can tell Postcard about new mail as it "
+"arrives (IMAP IDLE); Microsoft 365 accounts are asked every minute instead."
 msgstr ""
 
 #: data/in.gxanshu.postcard.gschema.xml:57
-msgid "Append a signature"
+msgid "Sync interval in minutes"
 msgstr ""
 
 #: data/in.gxanshu.postcard.gschema.xml:58
-msgid "Add a signature to the bottom of outgoing messages."
+msgid "How often to check for new mail. Set to 0 to check manually only."
 msgstr ""
 
 #: data/in.gxanshu.postcard.gschema.xml:62
-msgid "Signature text"
+msgid "Append a signature"
 msgstr ""
 
 #: data/in.gxanshu.postcard.gschema.xml:63
-msgid "The signature appended to outgoing messages."
+msgid "Add a signature to the bottom of outgoing messages."
 msgstr ""
 
 #: data/in.gxanshu.postcard.gschema.xml:67
+msgid "Signature text"
+msgstr ""
+
+#: data/in.gxanshu.postcard.gschema.xml:68
+msgid "The signature appended to outgoing messages."
+msgstr ""
+
+#: data/in.gxanshu.postcard.gschema.xml:72
 msgid "Main window width"
 msgstr ""
 
-#: data/in.gxanshu.postcard.gschema.xml:71
+#: data/in.gxanshu.postcard.gschema.xml:76
 msgid "Main window height"
 msgstr ""
 
-#: data/in.gxanshu.postcard.gschema.xml:75
+#: data/in.gxanshu.postcard.gschema.xml:80
 msgid "Main window maximized"
 msgstr ""
 
-#: data/in.gxanshu.postcard.gschema.xml:80
+#: data/in.gxanshu.postcard.gschema.xml:85
 msgid "Folder sidebar width"
 msgstr ""
 
-#: data/in.gxanshu.postcard.gschema.xml:85
+#: data/in.gxanshu.postcard.gschema.xml:90
 msgid "Conversation list width"
 msgstr ""
 
@@ -224,50 +234,105 @@ msgstr ""
 msgid "The three-pane layout with folders, conversations, and reader"
 msgstr ""
 
-#: src/postcard/accounts_dialog.py:45
+#: src/postcard/account_dialog.py:82
+msgid "Find Automatically"
+msgstr ""
+
+#: src/postcard/account_dialog.py:86
+msgid "None"
+msgstr ""
+
+#: src/postcard/account_dialog.py:131 src/postcard/accounts_dialog.py:45
+msgid "Edit Account"
+msgstr ""
+
+#: src/postcard/account_dialog.py:132 src/postcard/preferences_dialog.py:147
+msgid "Save"
+msgstr ""
+
+#: src/postcard/account_dialog.py:136
+msgid "Password (leave empty to keep it)"
+msgstr ""
+
+#: src/postcard/account_dialog.py:151
+msgid "Signed in through Online Accounts in Settings."
+msgstr ""
+
+#: src/postcard/account_dialog.py:229
+msgid "Looking up the settings…"
+msgstr ""
+
+#: src/postcard/account_dialog.py:251
+msgid "No settings found"
+msgstr ""
+
+#: src/postcard/account_dialog.py:252
+msgid "Choose your mail provider above, or enter the servers below."
+msgstr ""
+
+#: src/postcard/account_dialog.py:257
+msgid "Settings found"
+msgstr ""
+
+#: src/postcard/account_dialog.py:257
+#, python-brace-format
+msgid "From {source}"
+msgstr ""
+
+#: src/postcard/account_dialog.py:272
+msgid "Looking up your mail server…"
+msgstr ""
+
+#: src/postcard/account_dialog.py:436
+#, python-brace-format
+msgid "{server}: {reason}"
+msgstr ""
+
+#: src/postcard/accounts_dialog.py:51
 msgid "Remove Account"
 msgstr ""
 
-#: src/postcard/accounts_dialog.py:56
+#: src/postcard/accounts_dialog.py:62
 msgid "Show as one row"
 msgstr ""
 
-#: src/postcard/application.py:50
+#: src/postcard/application.py:51
 msgid "Start in the background without showing a window"
 msgstr ""
 
-#: src/postcard/application.py:153
+#: src/postcard/application.py:155
 msgid "translator-credits"
 msgstr ""
 
-#: src/postcard/composer_window.py:353 src/ui/composer-window.blp:157
+#: src/postcard/composer_window.py:373 src/ui/composer-window.blp:157
 msgid "Insert Link"
 msgstr ""
 
-#: src/postcard/composer_window.py:354 src/postcard/window.py:2790
-#: src/ui/account-dialog.blp:17 src/ui/composer-window.blp:18
+#: src/postcard/composer_window.py:374 src/postcard/preferences_dialog.py:146
+#: src/postcard/window.py:2806 src/ui/account-dialog.blp:17
+#: src/ui/composer-window.blp:18
 msgid "Cancel"
 msgstr ""
 
-#: src/postcard/composer_window.py:355
+#: src/postcard/composer_window.py:375
 msgid "Insert"
 msgstr ""
 
-#: src/postcard/composer_window.py:398
+#: src/postcard/composer_window.py:418
 msgid "(no recipient)"
 msgstr ""
 
-#: src/postcard/composer_window.py:441
+#: src/postcard/composer_window.py:461
 msgid "Remove Attachment"
 msgstr ""
 
-#: src/postcard/composer_window.py:568 src/postcard/window.py:1048
-#: src/postcard/window.py:1510 src/postcard/window.py:2596
-#: src/postcard/window.py:2658 src/postcard/window.py:3119
+#: src/postcard/composer_window.py:588 src/postcard/window.py:1053
+#: src/postcard/window.py:1515 src/postcard/window.py:2612
+#: src/postcard/window.py:2674 src/postcard/window.py:3133
 msgid "Could not sign in to this account."
 msgstr ""
 
-#: src/postcard/composer_window.py:613
+#: src/postcard/composer_window.py:633
 #, python-brace-format
 msgid "Couldn't send: {msg}. Saved to Outbox."
 msgstr ""
@@ -296,7 +361,7 @@ msgstr ""
 msgid "Today"
 msgstr ""
 
-#: src/postcard/inbox_rows.py:79 src/postcard/mail_sync.py:956
+#: src/postcard/inbox_rows.py:79 src/postcard/mail_sync.py:988
 msgid "Yesterday"
 msgstr ""
 
@@ -360,129 +425,142 @@ msgstr ""
 msgid "Microsoft is busy right now. Try again in a moment."
 msgstr ""
 
-#: src/postcard/mail_sync.py:954
+#: src/postcard/core/settings_migration.py:8
+#: src/postcard/preferences_dialog.py:156 src/ui/account-dialog.blp:148
+msgid "Signature"
+msgstr ""
+
+#: src/postcard/mail_sync.py:986
 #, python-brace-format
 msgid "Today {time}"
 msgstr ""
 
-#: src/postcard/message_view.py:87
+#: src/postcard/message_view.py:96
 msgid "Accepted"
 msgstr ""
 
-#: src/postcard/message_view.py:88 src/postcard/message_view.py:367
+#: src/postcard/message_view.py:97 src/postcard/message_view.py:382
 msgid "Maybe"
 msgstr ""
 
-#: src/postcard/message_view.py:89
+#: src/postcard/message_view.py:98
 msgid "Declined"
 msgstr ""
 
-#: src/postcard/message_view.py:90
+#: src/postcard/message_view.py:99
 msgid "No answer yet"
 msgstr ""
 
-#: src/postcard/message_view.py:114
+#: src/postcard/message_view.py:123
 #, python-brace-format
 msgid "to {address}"
 msgstr ""
 
-#: src/postcard/message_view.py:218
+#: src/postcard/message_view.py:232
 msgid "Loading…"
 msgstr ""
 
-#: src/postcard/message_view.py:234
+#: src/postcard/message_view.py:248
 msgid "Couldn't load this message."
 msgstr ""
 
-#: src/postcard/message_view.py:264 src/ui/composer-window.blp:49
+#: src/postcard/message_view.py:279 src/ui/composer-window.blp:49
 msgid "From"
 msgstr ""
 
-#: src/postcard/message_view.py:265 src/ui/composer-window.blp:53
+#: src/postcard/message_view.py:280 src/ui/composer-window.blp:53
 msgid "To"
 msgstr ""
 
-#: src/postcard/message_view.py:266 src/ui/composer-window.blp:57
+#: src/postcard/message_view.py:281 src/ui/composer-window.blp:57
 msgid "Cc"
 msgstr ""
 
-#: src/postcard/message_view.py:267 src/ui/composer-window.blp:61
+#: src/postcard/message_view.py:282 src/ui/composer-window.blp:61
 msgid "Bcc"
 msgstr ""
 
-#: src/postcard/message_view.py:268
+#: src/postcard/message_view.py:283
 msgid "Date"
 msgstr ""
 
-#: src/postcard/message_view.py:283
+#: src/postcard/message_view.py:298
 msgid "Details"
 msgstr ""
 
-#: src/postcard/message_view.py:295
+#: src/postcard/message_view.py:310
 msgid "You're subscribed to this mailing list."
 msgstr ""
 
-#: src/postcard/message_view.py:296 src/postcard/window.py:2791
+#: src/postcard/message_view.py:311 src/postcard/window.py:2807
 msgid "Unsubscribe"
 msgstr ""
 
-#: src/postcard/message_view.py:327
+#: src/postcard/message_view.py:342
 msgid "Invitation"
 msgstr ""
 
-#: src/postcard/message_view.py:335
+#: src/postcard/message_view.py:350
 msgid "When"
 msgstr ""
 
-#: src/postcard/message_view.py:336
+#: src/postcard/message_view.py:351
 msgid "Repeats"
 msgstr ""
 
-#: src/postcard/message_view.py:336
+#: src/postcard/message_view.py:351
 msgid "Yes"
 msgstr ""
 
-#: src/postcard/message_view.py:337
+#: src/postcard/message_view.py:352
 msgid "Where"
 msgstr ""
 
-#: src/postcard/message_view.py:338
+#: src/postcard/message_view.py:353
 msgid "Organizer"
 msgstr ""
 
-#: src/postcard/message_view.py:348
+#: src/postcard/message_view.py:363
 msgid "This event was canceled."
 msgstr ""
 
-#: src/postcard/message_view.py:366
+#: src/postcard/message_view.py:381
 msgid "Accept"
 msgstr ""
 
-#: src/postcard/message_view.py:368
+#: src/postcard/message_view.py:383
 msgid "Decline"
 msgstr ""
 
-#: src/postcard/message_view.py:388
+#: src/postcard/message_view.py:403
 msgid "Sending…"
 msgstr ""
 
-#: src/postcard/message_view.py:412
+#: src/postcard/message_view.py:427
 msgid "Remote images are blocked to protect your privacy."
 msgstr ""
 
-#: src/postcard/message_view.py:413
+#: src/postcard/message_view.py:428
 msgid "Show Images"
 msgstr ""
 
-#: src/postcard/message_view.py:497 src/ui/composer-window.blp:89
+#: src/postcard/message_view.py:495
+msgid "Show on Light Background"
+msgstr ""
+
+#: src/postcard/message_view.py:495
+msgid "Show on Dark Background"
+msgstr ""
+
+#: src/postcard/message_view.py:598 src/ui/composer-window.blp:89
 msgid "Attachments"
 msgstr ""
 
-#: src/postcard/message_view.py:510
+#: src/postcard/message_view.py:611
 msgid "Open with the default app"
 msgstr ""
 
-#: src/postcard/message_view.py:518
+#: src/postcard/message_view.py:619
 msgid "Save Attachment"
 msgstr ""
 
@@ -507,166 +585,182 @@ msgstr ""
 msgid "Could not open Settings."
 msgstr ""
 
-#: src/postcard/preferences_dialog.py:15
+#: src/postcard/preferences_dialog.py:17
 msgid "Manually"
 msgstr ""
 
-#: src/postcard/preferences_dialog.py:16
+#: src/postcard/preferences_dialog.py:18
 msgid "Every 5 minutes"
 msgstr ""
 
-#: src/postcard/preferences_dialog.py:17
+#: src/postcard/preferences_dialog.py:19
 msgid "Every 15 minutes"
 msgstr ""
 
-#: src/postcard/preferences_dialog.py:18
+#: src/postcard/preferences_dialog.py:20
 msgid "Every 30 minutes"
 msgstr ""
 
-#: src/postcard/preferences_dialog.py:19
+#: src/postcard/preferences_dialog.py:21
 msgid "Every hour"
 msgstr ""
 
-#: src/postcard/preferences_dialog.py:135
+#: src/postcard/preferences_dialog.py:113
+msgid "Delete Signature"
+msgstr ""
+
+#: src/postcard/preferences_dialog.py:124
+msgid "Name"
+msgstr ""
+
+#: src/postcard/preferences_dialog.py:143
+msgid "Edit Signature"
+msgstr ""
+
+#: src/postcard/preferences_dialog.py:143
+msgid "New Signature"
+msgstr ""
+
+#: src/postcard/preferences_dialog.py:200
 msgid "Postcard checks for new mail after you log in."
 msgstr ""
 
-#: src/postcard/preferences_dialog.py:173
-#: src/postcard/preferences_dialog.py:203
+#: src/postcard/preferences_dialog.py:238
+#: src/postcard/preferences_dialog.py:268
 msgid "Could not change whether Postcard starts at login."
 msgstr ""
 
-#: src/postcard/tray.py:113
+#: src/postcard/tray.py:117
 msgid "Open Postcard"
 msgstr ""
 
-#: src/postcard/tray.py:114
+#: src/postcard/tray.py:118
 msgid "Compose"
 msgstr ""
 
-#: src/postcard/tray.py:115 src/ui/main-window.blp:134
+#: src/postcard/tray.py:119 src/ui/main-window.blp:134
 msgid "Refresh Inbox"
 msgstr ""
 
-#: src/postcard/tray.py:116
+#: src/postcard/tray.py:120
 msgid "Quit"
 msgstr ""
 
-#: src/postcard/window.py:100
+#: src/postcard/window.py:104
 #, python-brace-format
 msgid "Archived"
 msgid_plural "Archived {n} conversations"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:102
+#: src/postcard/window.py:106
 #, python-brace-format
 msgid "Unarchived"
 msgid_plural "Unarchived {n} conversations"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:103
+#: src/postcard/window.py:107
 #, python-brace-format
 msgid "Deleted"
 msgid_plural "Deleted {n} conversations"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:345 src/ui/main-window.blp:146
+#: src/postcard/window.py:352 src/ui/main-window.blp:146
 msgid "Inbox"
 msgstr ""
 
-#: src/postcard/window.py:346
+#: src/postcard/window.py:353
 msgid "Starred"
 msgstr ""
 
-#: src/postcard/window.py:347
+#: src/postcard/window.py:354
 msgid "Drafts"
 msgstr ""
 
-#: src/postcard/window.py:348
+#: src/postcard/window.py:355
 msgid "Sent"
 msgstr ""
 
-#: src/postcard/window.py:349
+#: src/postcard/window.py:356
 msgid "Trash"
 msgstr ""
 
-#: src/postcard/window.py:350 src/postcard/window.py:1187
+#: src/postcard/window.py:357 src/postcard/window.py:1192
 #: src/ui/main-window.blp:276 src/ui/main-window.blp:281
 msgid "Archive"
 msgstr ""
 
-#: src/postcard/window.py:351
+#: src/postcard/window.py:358
 msgid "Spam"
 msgstr ""
 
-#: src/postcard/window.py:868
+#: src/postcard/window.py:873
 #, python-brace-format
 msgid "Mail from {senders} now goes to {category}."
 msgstr ""
 
-#: src/postcard/window.py:1042
+#: src/postcard/window.py:1047
 msgid "You're offline. This will reach the server when you reconnect."
 msgstr ""
 
-#: src/postcard/window.py:1056
+#: src/postcard/window.py:1061
 #, python-brace-format
 msgid "Action failed: {msg}"
 msgstr ""
 
-#: src/postcard/window.py:1134 src/postcard/window.py:2475
+#: src/postcard/window.py:1139 src/postcard/window.py:2491
 #: src/ui/main-window.blp:245
 msgid "Mark Read"
 msgstr ""
 
-#: src/postcard/window.py:1136 src/postcard/window.py:2478
+#: src/postcard/window.py:1141 src/postcard/window.py:2494
 msgid "Mark Unread"
 msgstr ""
 
-#: src/postcard/window.py:1138 src/postcard/window.py:2482
+#: src/postcard/window.py:1143 src/postcard/window.py:2498
 msgid "Unstar"
 msgstr ""
 
-#: src/postcard/window.py:1138 src/postcard/window.py:2485
+#: src/postcard/window.py:1143 src/postcard/window.py:2501
 #: src/ui/main-window.blp:252
 msgid "Star"
 msgstr ""
 
-#: src/postcard/window.py:1140 src/postcard/window.py:2488
+#: src/postcard/window.py:1145 src/postcard/window.py:2504
 msgid "Remove Priority"
 msgstr ""
 
-#: src/postcard/window.py:1142 src/postcard/window.py:2491
+#: src/postcard/window.py:1147 src/postcard/window.py:2507
 #: src/ui/main-window.blp:259
 msgid "Mark as Priority"
 msgstr ""
 
-#: src/postcard/window.py:1157
+#: src/postcard/window.py:1162
 msgid "Always Sort Sender As"
 msgstr ""
 
-#: src/postcard/window.py:1162 src/ui/main-window.blp:287
+#: src/postcard/window.py:1167 src/ui/main-window.blp:287
 msgid "Delete"
 msgstr ""
 
-#: src/postcard/window.py:1166
+#: src/postcard/window.py:1171
 msgid "Move to"
 msgstr ""
 
-#: src/postcard/window.py:1186
+#: src/postcard/window.py:1191
 msgid "Unarchive"
 msgstr ""
 
-#: src/postcard/window.py:1223
+#: src/postcard/window.py:1228
 #, python-brace-format
 msgid "Moved to {name}"
 msgid_plural "Moved {n} conversations to {name}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:1250
+#: src/postcard/window.py:1255
 #, python-brace-format
 msgid "No {role} folder for {account}."
 msgstr ""
@@ -674,124 +768,124 @@ msgstr ""
 #. High priority: a normal toast queues behind whatever is on screen (a
 #. "no such folder" warning, say), and its 5s wait is the whole undo
 #. window -- Undo would appear only once the move had already gone out.
-#: src/postcard/window.py:1350
+#: src/postcard/window.py:1355
 msgid "Undo"
 msgstr ""
 
-#: src/postcard/window.py:1499 src/postcard/window.py:1518
+#: src/postcard/window.py:1504 src/postcard/window.py:1523
 #, python-brace-format
 msgid "Move failed: {msg}"
 msgstr ""
 
-#: src/postcard/window.py:1667
+#: src/postcard/window.py:1672
 msgid "More"
 msgstr ""
 
-#: src/postcard/window.py:2006 src/ui/main-window.blp:60
+#: src/postcard/window.py:2022 src/ui/main-window.blp:60
 msgid "Folders"
 msgstr ""
 
-#: src/postcard/window.py:2141 src/ui/main-window.blp:379
+#: src/postcard/window.py:2157 src/ui/main-window.blp:379
 msgid "By Importance"
 msgstr ""
 
-#: src/postcard/window.py:2142 src/ui/main-window.blp:385
+#: src/postcard/window.py:2158 src/ui/main-window.blp:385
 msgid "By Category"
 msgstr ""
 
-#: src/postcard/window.py:2143 src/ui/main-window.blp:391
+#: src/postcard/window.py:2159 src/ui/main-window.blp:391
 msgid "By Date"
 msgstr ""
 
 #. No UID and no cached copy: nothing to fetch until the next sync.
-#: src/postcard/window.py:2561
+#: src/postcard/window.py:2577
 msgid "This message hasn't finished syncing yet."
 msgstr ""
 
-#: src/postcard/window.py:2566
+#: src/postcard/window.py:2582
 msgid "This message's mailbox is no longer available."
 msgstr ""
 
-#: src/postcard/window.py:2625
+#: src/postcard/window.py:2641
 msgid "This invitation can't be answered."
 msgstr ""
 
-#: src/postcard/window.py:2684
+#: src/postcard/window.py:2700
 #, python-brace-format
 msgid "Couldn't answer the invitation: {msg}"
 msgstr ""
 
-#: src/postcard/window.py:2725
+#: src/postcard/window.py:2741
 #, python-brace-format
 msgid "Couldn't save {name}: {msg}"
 msgstr ""
 
-#: src/postcard/window.py:2731
+#: src/postcard/window.py:2747
 #, python-brace-format
 msgid "Saved {name}."
 msgstr ""
 
-#: src/postcard/window.py:2746 src/postcard/window.py:2767
+#: src/postcard/window.py:2762 src/postcard/window.py:2783
 #, python-brace-format
 msgid "Couldn't open {name}."
 msgstr ""
 
-#: src/postcard/window.py:2785
+#: src/postcard/window.py:2801
 msgid "Unsubscribe from this list?"
 msgstr ""
 
-#: src/postcard/window.py:2786
+#: src/postcard/window.py:2802
 #, python-brace-format
 msgid "A request will be sent to {destination}."
 msgstr ""
 
-#: src/postcard/window.py:2830
+#: src/postcard/window.py:2846
 msgid "Couldn't unsubscribe. The list didn't accept the request."
 msgstr ""
 
-#: src/postcard/window.py:2833
+#: src/postcard/window.py:2849
 msgid "Unsubscribed. It can take a few days to take effect."
 msgstr ""
 
-#: src/postcard/window.py:2945
+#: src/postcard/window.py:2961
 #, python-brace-format
 msgid "Sent {n} queued message(s)."
 msgstr ""
 
-#: src/postcard/window.py:2956
+#: src/postcard/window.py:2972
 #, python-brace-format
 msgid "Couldn't send a queued message. {reason}"
 msgid_plural "Couldn't send {n} queued messages. {reason}"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:3293
+#: src/postcard/window.py:3307
 #, python-brace-format
 msgid "{n} new message"
 msgid_plural "{n} new messages"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/postcard/window.py:3318
+#: src/postcard/window.py:3332
 #, python-brace-format
 msgid "{n} new messages"
 msgstr ""
 
 #. Auth failures aren't worth a Retry button (same password); everything
 #. else is a transient connection problem the user can retry.
-#: src/postcard/window.py:3341
+#: src/postcard/window.py:3355
 msgid "Retry"
 msgstr ""
 
-#: src/postcard/window.py:3350
+#: src/postcard/window.py:3364
 msgid "You're offline. Postcard will reconnect when your connection returns."
 msgstr ""
 
-#: src/postcard/window.py:3389
+#: src/postcard/window.py:3403
 msgid "Postcard is running in the background"
 msgstr ""
 
-#: src/postcard/window.py:3390
+#: src/postcard/window.py:3404
 msgid "It will keep checking for new mail. Quit to stop."
 msgstr ""
 
@@ -800,50 +894,79 @@ msgstr ""
 msgid "Add Account"
 msgstr ""
 
-#: src/ui/account-dialog.blp:32
+#: src/ui/account-dialog.blp:38
+msgid "Save Anyway"
+msgstr ""
+
+#: src/ui/account-dialog.blp:44
 msgid "Account"
 msgstr ""
 
-#: src/ui/account-dialog.blp:33
-msgid ""
-"Most servers sign you in with your email address. Change the username if "
-"yours expects a different one."
-msgstr ""
-
-#: src/ui/account-dialog.blp:36
+#: src/ui/account-dialog.blp:47
 msgid "Display Name"
 msgstr ""
 
-#: src/ui/account-dialog.blp:40
+#: src/ui/account-dialog.blp:51
 msgid "Email Address"
 msgstr ""
 
-#: src/ui/account-dialog.blp:45
+#: src/ui/account-dialog.blp:56
 msgid "Username"
 msgstr ""
 
-#: src/ui/account-dialog.blp:49
+#: src/ui/account-dialog.blp:60
 msgid "Password"
 msgstr ""
 
-#: src/ui/account-dialog.blp:54
+#: src/ui/account-dialog.blp:65
+msgid "Server Settings"
+msgstr ""
+
+#: src/ui/account-dialog.blp:66
+msgid ""
+"Filled in from your address when Postcard can find them. Pick your mail "
+"provider if it can't."
+msgstr ""
+
+#: src/ui/account-dialog.blp:69
+msgid "Mail Provider"
+msgstr ""
+
+#: src/ui/account-dialog.blp:86
 msgid "Incoming Mail (IMAP)"
 msgstr ""
 
-#: src/ui/account-dialog.blp:57 src/ui/account-dialog.blp:79
+#: src/ui/account-dialog.blp:89 src/ui/account-dialog.blp:116
 msgid "Server"
 msgstr ""
 
-#: src/ui/account-dialog.blp:61 src/ui/account-dialog.blp:83
+#: src/ui/account-dialog.blp:93 src/ui/account-dialog.blp:120
 msgid "Port"
 msgstr ""
 
-#: src/ui/account-dialog.blp:67 src/ui/account-dialog.blp:89
+#: src/ui/account-dialog.blp:99 src/ui/account-dialog.blp:126
 msgid "Connection Security"
 msgstr ""
 
-#: src/ui/account-dialog.blp:76
+#: src/ui/account-dialog.blp:113
 msgid "Outgoing Mail (SMTP)"
+msgstr ""
+
+#: src/ui/account-dialog.blp:140
+msgid "Options"
+msgstr ""
+
+#: src/ui/account-dialog.blp:143
+msgid "Load Remote Images"
+msgstr ""
+
+#: src/ui/account-dialog.blp:144
+msgid "Show images from the internet in this account's mail without asking"
+msgstr ""
+
+#: src/ui/account-dialog.blp:149
+msgid ""
+"Added to new messages from this account. Manage signatures in Preferences."
 msgstr ""
 
 #: src/ui/accounts-dialog.blp:5
@@ -868,7 +991,7 @@ msgid ""
 "The rest list each conversation on its own."
 msgstr ""
 
-#: src/ui/composer-window.blp:5 src/ui/main-window.blp:78
+#: src/ui/composer-window.blp:5 src/ui/main-window.blp:86
 msgid "New Message"
 msgstr ""
 
@@ -928,7 +1051,7 @@ msgstr ""
 msgid "Resize folder sidebar"
 msgstr ""
 
-#: src/ui/main-window.blp:87
+#: src/ui/main-window.blp:79
 msgid "Main Menu"
 msgstr ""
 
@@ -1073,64 +1196,72 @@ msgid "Show a notification when new mail arrives"
 msgstr ""
 
 #: src/ui/preferences-dialog.blp:17
-msgid "Load Remote Images"
-msgstr ""
-
-#: src/ui/preferences-dialog.blp:18
-msgid "Load images from the internet without asking"
-msgstr ""
-
-#: src/ui/preferences-dialog.blp:22
 msgid "Load Sender Avatars"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:23
+#: src/ui/preferences-dialog.blp:18
 msgid "Fetch sender pictures from Gravatar, which tells them who emails you"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:27
+#: src/ui/preferences-dialog.blp:22
 msgid "Show Account Names"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:28
+#: src/ui/preferences-dialog.blp:23
 msgid ""
 "Name accounts in the sidebar by their display name instead of their address"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:32
+#: src/ui/preferences-dialog.blp:27
 msgid "Run in Background"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:33
+#: src/ui/preferences-dialog.blp:28
 msgid "Keep checking for mail after the window is closed"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:37
+#: src/ui/preferences-dialog.blp:32
 msgid "Start at Login"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:38
+#: src/ui/preferences-dialog.blp:33
 msgid "Start hidden when you log in and keep checking for mail"
 msgstr ""
 
+#: src/ui/preferences-dialog.blp:39
+msgid "Getting Mail"
+msgstr ""
+
 #: src/ui/preferences-dialog.blp:42
-msgid "Check for Mail"
+msgid "New Mail Instantly"
 msgstr ""
 
 #: src/ui/preferences-dialog.blp:43
-msgid "How often to look for new mail"
+msgid ""
+"The server tells Postcard the moment mail arrives in an inbox. Microsoft 365 "
+"is asked every minute."
+msgstr ""
+
+#: src/ui/preferences-dialog.blp:47
+msgid "Sync All Folders"
 msgstr ""
 
 #: src/ui/preferences-dialog.blp:48
-msgid "Signature"
+msgid ""
+"Also catches changes push doesn't report: other folders, and mail read or "
+"moved elsewhere"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:51
-msgid "Append Signature"
+#: src/ui/preferences-dialog.blp:54
+msgid "Signatures"
 msgstr ""
 
-#: src/ui/preferences-dialog.blp:52
-msgid "Add a signature to messages you send"
+#: src/ui/preferences-dialog.blp:55
+msgid "Pick each account's signature under Manage Accounts."
+msgstr ""
+
+#: src/ui/preferences-dialog.blp:60
+msgid "Add Signature"
 msgstr ""
 
 #: src/ui/shortcuts-dialog.blp:8

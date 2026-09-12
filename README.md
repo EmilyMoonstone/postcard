@@ -59,7 +59,9 @@ Postcard has the classic three panel layout. folders on the left, conversations 
 - **Google and Microsoft 365 in one click.** If you already added the account in GNOME Settings under Online Accounts, just pick it in Postcard. It uses OAuth, so Postcard never sees your password. Microsoft 365 and Outlook.com mail goes over the Microsoft Graph API.
 - **Any IMAP/SMTP account**, as many as you want. Passwords are stored in the system keyring. You can choose TLS or STARTTLS for each server, so Proton Mail Bridge also works.
 - **A separate username** when the server's login is not your email address, or the mailbox is reached through a preferred alias.
-- **Server settings are filled in automatically** from your email address for Gmail, Yahoo, iCloud, Outlook, Fastmail, Zoho, AOL and Yandex. If you type something by hand, Postcard does not touch it.
+- **Server settings are found for you**, the way Thunderbird does: from your provider's autoconfig, Mozilla's database, DNS, or your domain's mail host. Web hosts like netcup, all-inkl, IONOS, Strato and Hetzner are recognized, and you can pick yours from a searchable list. If you type something by hand, Postcard does not touch it.
+- **The connection is tested before an account is saved**, so a typo in a server name or password shows up right away, not at the first sync.
+- **Edit accounts** any time: name, servers, password, remote images and signature per account.
 - **One unified inbox, organized like Spark.** *Inbox*, *Starred*, *Drafts*, *Sent*, *Trash*, *Archive* and *Spam* each gather every account, with the accounts listed underneath; every other folder is one click away under *More*. Archive, trash, star and reply all still act on the right account.
 - **Smart inbox.** Threads you mark as priority stay on top. Newsletters, notifications and invitations fold into one row each, sorted by the mail's own headers (and Gmail's categories on Gmail), with no AI and nothing leaving your computer. Tell Postcard once where a sender belongs and it remembers. Choose per account whether it shows up as one row of its own, and switch between *By Importance*, *By Category* and *By Date*.
 - **Threaded conversations** and nested folders shown as a tree.
@@ -70,19 +72,20 @@ Postcard has the classic three panel layout. folders on the left, conversations 
 ### ✍️ Composing
 
 - **Rich text**: bold, italic, underline, strikethrough, bulleted and numbered lists, links. Mail is sent as HTML with a plain-text version included.
-- **Reply, reply-all and forward**, with Cc/Bcc, a signature, and a Drafts/Outbox that does not lose your message. Drafts are saved to the server too, so your other devices see them.
+- **Reply, reply-all and forward**, with Cc/Bcc and a Drafts/Outbox that does not lose your message. Drafts are saved to the server too, so your other devices see them.
+- **Signatures like Spark's**: keep several, give each account its default, and the composer swaps it when you change the sender.
 - **Calendar invitations**: see when and where, and accept, answer maybe or decline from the message.
 - **Recipient autocomplete** from the addresses already in your mail.
 
 ### 🖥️ Desktop
 
-- **HTML and plain-text mail.** Remote images are blocked until you allow them, and links open in your browser.
+- **HTML and plain-text mail**, on the app's own light or dark background with a one-click switch per message, and only as tall as the message. Remote images are blocked until you allow them, per account, and links open in your browser.
 - **One click unsubscribe** from a mailing list. If the list supports it (RFC 8058), Postcard sends the request itself after telling you where it goes; otherwise it opens the list's page in your browser or a pre-filled email.
 - **Archive, trash, move, undo**, on one conversation or a whole selection.
 - **Attachments** open in their default app with one click.
 - **Relative dates** ("2h ago", "Yesterday"), with the exact time shown on hover.
 - **Desktop notifications** when new mail arrives.
-- **Tray icon with an unread badge**, on desktops that show one (KDE, Xfce, and friends). GNOME ships no tray, so there it stays a Background App.
+- **Tray icon with an unread badge and your newest mail** in its menu, on desktops that show one (KDE, Xfce, Ubuntu's GNOME, and friends).
 - **Sender avatars** from Gravatar, or the icon from the sender's website if there is no Gravatar. You can turn this off.
 - **Default mail client**: `mailto:` links open the composer with the fields already filled.
 - **Name accounts your way**: show each account's display name in the sidebar instead of its address.
