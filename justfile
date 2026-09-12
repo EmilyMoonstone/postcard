@@ -75,9 +75,9 @@ inspect: build
 # exception in the GTK layer -- the part the unit tests can't import.
 smoke: build
     flatpak run --command=sh "{{app-id}}" -c \
-        'gtk4-broadwayd :27 --port 18127 >/dev/null 2>&1 & \
+        'gtk4-broadwayd :27 --port 18127 >/dev/null 2>&1 & broadway=$!; \
          sleep 1; GDK_BACKEND=broadway BROADWAY_DISPLAY=:27 python3 -; \
-         status=$?; kill %1; exit $status' < tools/gui_smoke.py
+         status=$?; kill $broadway; exit $status' < tools/gui_smoke.py
 
 # ----------------------------------------------------------------------------
 # Package & lint
