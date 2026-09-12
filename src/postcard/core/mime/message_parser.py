@@ -64,6 +64,8 @@ def parse_message(raw: bytes) -> ParsedMessage:
             result.text_body = part.get_content()
         elif content_type == "text/html" and result.html_body is None:
             result.html_body = part.get_content()
+        elif content_type == "text/calendar" and result.invitation is not None:
+            continue  # shown as the invitation card, not as a nameless file
         else:
             # anything else (an inline image, unrecognised type) -- treat
             # if as an attachment rather than silently dropping it

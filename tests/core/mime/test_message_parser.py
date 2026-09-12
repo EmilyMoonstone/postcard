@@ -235,6 +235,7 @@ def test_an_invitation_part_is_parsed_out_of_the_message():
 
     assert parsed.invitation is not None
     assert (parsed.invitation.method, parsed.invitation.summary) == ("REQUEST", "Lunch")
+    assert parsed.attachments == []
 
 
 def test_ordinary_mail_has_no_invitation():
