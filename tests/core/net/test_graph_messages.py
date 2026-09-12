@@ -7,6 +7,7 @@ from postcard.core.net.graph_messages import (
     folder_ids,
     message_header,
     move,
+    search_headers,
     set_flags,
 )
 from postcard.core.net.graph_session import BatchResponse, GraphError
@@ -205,3 +206,22 @@ def test_a_move_that_all_succeeds_has_no_failure():
     outcome = move(graph, ["a"], "dest")  # type: ignore[arg-type]
 
     assert (outcome.destination_ids, outcome.failed_index) == (["a"], None)
+
+
+def test_search_headers_asks_graph_to_search_the_folder():
+    graph = FakeGraph(get={"value": [ITEM]})
+
+    [header] = search_headers(graph, "in", 'say "hi" there', 25)  # type: ignore[arg-type]
+
+    assert header.uid == "AAMk1"
+    path = graph.paths[0]
+    assert "$search=%22say%20%20hi%20%20there%22" in path
+    assert "$top=25" in path
+    assert "$orderby" not in path
+
+
+def test_an_empty_search_asks_nothing():
+    graph = FakeGraph()
+
+    assert search_headers(graph, "in", ' " ', 25) == []  # type: ignore[arg-type]
+    assert graph.paths == []

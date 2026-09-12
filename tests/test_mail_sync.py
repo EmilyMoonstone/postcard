@@ -993,6 +993,10 @@ class FakeGraphModules:
         self.calls.append(("move", ids, destination))
         return MoveOutcome(["m1"], 1, "boom")
 
+    def search_headers(self, session, folder_id, query, limit):
+        self.calls.append(("search", folder_id, query, limit))
+        return []
+
     def send_mime(self, session, raw, recipients):
         self.calls.append(("send", raw, recipients))
 
@@ -1122,3 +1126,38 @@ def test_a_graph_draft_goes_to_graph(graph):
     mail_sync.save_draft(graph_account(), GRAPH_TOKEN, b"raw", [])
 
     assert graph.calls == [("draft", b"raw")]
+
+
+# --- searching on the server ------------------------------------------------------
+
+
+def test_an_imap_search_fetches_the_newest_matches(monkeypatch):
+    class SearchingImapSession(FakeImapSession):
+        selected: list[str] = []
+        fetched: list[list[str]] = []
+
+        def select(self, mailbox, is_readonly=True):
+            type(self).selected.append(mailbox)
+            return 0
+
+        def search_text(self, query):
+            return {str(uid) for uid in range(1, 80)}
+
+        def fetch_headers_by_uid(self, uids):
+            type(self).fetched.append(uids)
+            return [fetched(uid=uids[0])]
+
+    monkeypatch.setattr(mail_sync, "ImapSession", SearchingImapSession)
+
+    [header] = mail_sync.search_mailbox(account(), CREDENTIAL, "Archive", "lunch")
+
+    assert header.uid == "79"
+    assert SearchingImapSession.selected == ["Archive"]
+    [uids] = SearchingImapSession.fetched
+    assert (len(uids), uids[0], uids[-1]) == (mail_sync.SEARCH_LIMIT, "79", "30")
+
+
+def test_a_graph_search_goes_to_graph(graph):
+    mail_sync.search_mailbox(graph_account(), GRAPH_TOKEN, "in", "lunch")
+
+    assert graph.calls == [("search", "in", "lunch", mail_sync.SEARCH_LIMIT)]

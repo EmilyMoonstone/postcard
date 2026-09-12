@@ -468,7 +468,10 @@ class Database:
         return self._conversations_from_rows(rows, is_multi_folder=len(folder_ids) > 1)
 
     def search_conversations(
-        self, folder_ids: Sequence[int], query: str
+        self,
+        folder_ids: Sequence[int],
+        query: str,
+        server_hits: Sequence[int] = (),
     ) -> list[Conversation]:
         """Full-text search the folders; return each matching conversation whole.
 
@@ -483,7 +486,10 @@ class Database:
         if not match:
             return self.conversations_in_folders(folder_ids)
 
+        # server_hits are emails the server matched in text local search never
+        # indexed (the body), so they join the result whatever FTS says.
         places = ",".join("?" * len(folder_ids))
+        hit_places = ",".join("?" * len(server_hits)) or "NULL"
         rows = self._conn.execute(
             f"""
             SELECT {_EMAIL_COLUMNS} FROM emails
@@ -492,9 +498,12 @@ class Database:
                 FROM emails_fts f
                 JOIN emails e ON e.id = f.rowid
                 WHERE e.folder_id IN ({places}) AND emails_fts MATCH ?
+                UNION
+                SELECT COALESCE(conversation_id, id) FROM emails
+                WHERE id IN ({hit_places})
             )
             """,
-            (*folder_ids, *folder_ids, match),
+            (*folder_ids, *folder_ids, match, *server_hits),
         ).fetchall()
         return self._conversations_from_rows(rows, is_multi_folder=len(folder_ids) > 1)
 
@@ -514,6 +523,18 @@ class Database:
         thread_key = _sent_key if is_multi_folder else _arrival_key
         conversations.sort(key=lambda c: thread_key(c.latest), reverse=True)
         return conversations
+
+    def email_ids_for_server_ids(
+        self, folder_id: int, server_ids: Sequence[str]
+    ) -> list[int]:
+        if not server_ids:
+            return []
+        places = ",".join("?" * len(server_ids))
+        rows = self._conn.execute(
+            f"SELECT id FROM emails WHERE folder_id = ? AND server_id IN ({places})",
+            (folder_id, *server_ids),
+        ).fetchall()
+        return [row["id"] for row in rows]
 
     def unread_count_in_folder(self, folder_id: int) -> int:
         row = self._conn.execute(

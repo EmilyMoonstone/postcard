@@ -320,8 +320,23 @@ class ImapSession:
 
     def search_all_uids(self) -> set[str]:
         """Return every UID in the currently selected mailbox."""
+        return self._uid_search("ALL")
+
+    def search_text(self, query: str) -> set[str]:
+        """UIDs in the selected mailbox whose headers or body contain query.
+
+        Sent as a UTF-8 literal, so quotes, backslashes and umlauts in what the
+        user typed need no escaping and can't break out of the command.
+        """
+        imap = self._require_imap()
+        # typeshed says str, but imaplib writes the literal to the socket as is,
+        # and only bytes go through.
+        imap.literal = query.encode("utf-8")  # pyright: ignore[reportAttributeAccessIssue]
+        return self._uid_search("CHARSET", "UTF-8", "TEXT")
+
+    def _uid_search(self, *criteria: str) -> set[str]:
         try:
-            status, payload = self._require_imap().uid("SEARCH", "ALL")
+            status, payload = self._require_imap().uid("SEARCH", *criteria)
         except imaplib.IMAP4.error as error:
             raise ImapError(f"search failed: {error}") from error
 
@@ -396,6 +411,23 @@ class ImapSession:
             f"{start}:{end}",
             # BODY.PEEK[...] = look WITHOUT marking the message \Seen. The
             # partial TEXT is only the first bytes, for the preview line.
+            f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({_HEADER_FIELDS})] "
+            f"BODY.PEEK[TEXT]<0.{PREVIEW_BYTES}>)",
+        )
+        if status != STATUS_OK:
+            raise ImapError(f"fetch failed: {payload}")
+        return [
+            self._parse(meta, header_bytes, body)
+            for meta, header_bytes, body in fetch_items(payload)
+        ]
+
+    def fetch_headers_by_uid(self, uids: list[str]) -> list[FetchedHeader]:
+        """The same rows as fetch_recent_headers, for a chosen set of UIDs."""
+        if not uids:
+            return []
+        status, payload = self._require_imap().uid(
+            "FETCH",
+            ",".join(uids),
             f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({_HEADER_FIELDS})] "
             f"BODY.PEEK[TEXT]<0.{PREVIEW_BYTES}>)",
         )

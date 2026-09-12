@@ -178,6 +178,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._current_folder: Folder | None = None
         self._active_view: MessageView | None = None
         self._search_timeout: int = 0
+        # Emails the server found for the query on screen, which local search
+        # can't match when the words are only in the body. Bumping the
+        # generation drops results still in flight for an older query.
+        self._server_hits: list[int] = []
+        self._search_generation: int = 0
+        self._searching_folder_ids: set[int] = set()
         self._rendered_id: int | None = None
         self._suppress_folder_refresh: bool = False
         self._selection_update_in_progress: bool = False
@@ -1522,6 +1528,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._update_archive_button()
         if self._suppress_folder_refresh:
             return
+        if self.search_entry.get_text().strip():
+            self._start_server_search()
         self._refresh_conversations()
         # Only sync on a real folder change — rebuilding the sidebar re-emits
         # selection-changed for the same folder, which would loop. A folder
@@ -1673,7 +1681,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         folder_ids = [folder.id for folder in self._view_folders()]
         query = self.search_entry.get_text().strip()
         matches = (
-            self._db.search_conversations(folder_ids, query)
+            self._db.search_conversations(folder_ids, query, self._server_hits)
             if query
             else self._db.conversations_in_folders(folder_ids)
         )
@@ -1716,7 +1724,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     def _show_list_or_placeholder(self) -> None:
         if self._conversation_store.get_n_items() > 0:
             page = PAGE_LIST
-        elif self._is_view_syncing():
+        elif self._is_view_syncing() or self._searching_folder_ids:
             page = PAGE_LOADING
         else:
             page = PAGE_EMPTY
@@ -1750,7 +1758,83 @@ class PostcardMainWindow(Adw.ApplicationWindow):
 
     def _on_search_timeout(self) -> bool:
         self._search_timeout = 0
+        self._start_server_search()
         self._refresh_conversations()
+        return False
+
+    def _start_server_search(self) -> None:
+        """Ask the server of every folder on screen for the typed query.
+
+        Local results show at once; these join them as they arrive.
+        """
+        self._search_generation += 1
+        self._server_hits = []
+        self._searching_folder_ids.clear()
+        query = self.search_entry.get_text().strip()
+        if not query or not self._is_online or self._account is None:
+            return
+        for folder in self._view_folders():
+            account = self._accounts.get(folder.account_id)
+            if account is None or folder.name == mail_sync.OUTBOX_FOLDER:
+                continue
+            self._searching_folder_ids.add(folder.id)
+            threading.Thread(
+                target=self._search_worker,
+                args=(account, folder.id, folder.name, query, self._search_generation),
+                daemon=True,
+            ).start()
+
+    # Runs on the worker thread: network only, no Gtk/database access.
+    def _search_worker(
+        self,
+        account: Account,
+        folder_id: int,
+        folder_name: str,
+        query: str,
+        generation: int,
+    ) -> None:
+        headers: list[mail_sync.MessageHeader] = []
+        credential = secrets.credential_for(account)
+        if credential is None:
+            logger.warning("could not sign in to %s to search", account.email)
+        else:
+            try:
+                headers = mail_sync.search_mailbox(
+                    account, credential, folder_name, query
+                )
+            except Exception:
+                # Local results are already on screen, so a failed server
+                # search only means fewer of them -- not worth a banner.
+                logger.warning(
+                    "server search in %s failed (account %s)",
+                    folder_name,
+                    account.email,
+                    exc_info=True,
+                )
+        GLib.idle_add(self._on_search_done, folder_id, generation, headers)
+
+    def _on_search_done(
+        self,
+        folder_id: int,
+        generation: int,
+        headers: list[mail_sync.MessageHeader],
+    ) -> bool:
+        if generation != self._search_generation:
+            return False
+        self._searching_folder_ids.discard(folder_id)
+        # The folder can have gone with its account while the search ran.
+        if folder_id in self._folders_by_id and headers:
+            for header in headers:
+                if (folder_id, header.uid) not in self._move_tombstones:
+                    self._db.save_incoming_email(folder_id, header)
+            self._db.reassign_conversations(folder_id)
+            self._server_hits.extend(
+                self._db.email_ids_for_server_ids(
+                    folder_id, [header.uid for header in headers]
+                )
+            )
+        selected = self._selected_conversation()
+        self._refresh_conversations(keep_id=selected.id if selected else None)
         return False
 
     # Closing the search bar clears the query so the full list comes back.

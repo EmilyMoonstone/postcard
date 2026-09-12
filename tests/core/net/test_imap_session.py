@@ -391,3 +391,41 @@ def test_the_fetch_asks_for_a_body_slice_without_marking_it_seen(monkeypatch):
     [(_sequence, items)] = imap.calls
     assert "BODY.PEEK[TEXT]<0.2048>" in items
     assert "CONTENT-TRANSFER-ENCODING" in items
+
+
+# --- server search ------------------------------------------------------------
+
+
+def test_search_text_sends_the_query_as_a_utf8_literal(monkeypatch):
+    imap = FakeImap(search_reply=("OK", [b"3 17"]))
+    imap.literal = None
+    session = connect(monkeypatch, imap)
+
+    assert session.search_text('Grüße "Kammer"') == {"3", "17"}
+    assert imap.calls == [("SEARCH", "CHARSET", "UTF-8", "TEXT")]
+    assert imap.literal == 'Grüße "Kammer"'.encode()
+
+
+def test_fetch_headers_by_uid_fetches_exactly_those_uids(monkeypatch):
+    reply = (
+        "OK",
+        [
+            (
+                b"9 (UID 17 FLAGS () BODY[HEADER.FIELDS (SUBJECT)] {20}",
+                b"Subject: Hit\r\n\r\n",
+            )
+        ],
+    )
+    imap = FakeImap(search_reply=reply)
+    session = connect(monkeypatch, imap)
+
+    [header] = session.fetch_headers_by_uid(["17", "3"])
+
+    assert (header.uid, header.subject) == ("17", "Hit")
+    assert imap.calls[0][:2] == ("FETCH", "17,3")
+
+
+def test_fetching_no_uids_asks_nothing(monkeypatch):
+    imap = FakeImap()
+    assert connect(monkeypatch, imap).fetch_headers_by_uid([]) == []
+    assert imap.calls == []

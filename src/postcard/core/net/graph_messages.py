@@ -104,6 +104,27 @@ def fetch_headers(
     return [message_header(item) for item in session.get(path).get("value", [])]
 
 
+def search_headers(
+    session: GraphSession, folder_id: str, query: str, limit: int
+) -> list[MessageHeader]:
+    """Messages in a folder matching query anywhere, subject and body included.
+
+    $search takes a quoted phrase and has no escape for a quote inside one, so
+    those are dropped; it also can't be combined with $orderby, so the order is
+    Graph's own.
+    """
+    phrase = query.replace('"', " ").strip()
+    if not phrase:
+        return []
+    path = with_query(
+        f"/me/mailFolders/{quote_id(folder_id)}/messages",
+        search=f'"{phrase}"',
+        top=limit,
+        select=_HEADER_FIELDS,
+    )
+    return [message_header(item) for item in session.get(path).get("value", [])]
+
+
 def fetch_mime(session: GraphSession, message_id: str) -> bytes:
     """The whole message as RFC 5322 bytes, the same thing an IMAP fetch gives."""
     return session.request("GET", f"/me/messages/{quote_id(message_id)}/$value").body

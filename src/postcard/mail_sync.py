@@ -278,6 +278,29 @@ def fetch_mailbox(
     )
 
 
+# How many server matches a search brings in per folder, newest first.
+SEARCH_LIMIT = 50
+
+
+def search_mailbox(
+    account: Account, credential: Credential, folder_name: str, query: str
+) -> list[MessageHeader]:
+    """The newest messages in a folder the server finds query in.
+
+    Local search only sees mail already synced, and only its sender, subject
+    and preview; the server searches the whole folder, bodies included.
+    """
+    if account.is_graph:
+        return graph_messages.search_headers(
+            GraphSession(credential), folder_name, query, SEARCH_LIMIT
+        )
+    with _pooled_session(account, credential) as session:
+        session.select(folder_name)
+        uids = sorted(session.search_text(query), key=int, reverse=True)
+        raw = session.fetch_headers_by_uid(uids[:SEARCH_LIMIT])
+    return [_to_message_header(fetched) for fetched in raw]
+
+
 def _unread_counts(
     session: ImapSession, mailboxes: list[MailboxInfo], target: str
 ) -> dict[str, int]:

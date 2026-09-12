@@ -736,3 +736,21 @@ def test_a_message_without_bcc_has_none(db, folder):
     )
 
     assert db.bcc_for(row.id) == []
+
+
+def test_a_server_hit_joins_the_search_results_though_fts_misses_it(db, folder):
+    incoming(db, folder.id, "1", subject="Lunch", preview="see you at one")
+    incoming(db, folder.id, "2", subject="Invoice", preview="attached")
+    [hit] = db.email_ids_for_server_ids(folder.id, ["2"])
+
+    subjects = [c.subject for c in db.search_conversations([folder.id], "lunch", [hit])]
+
+    assert sorted(subjects) == ["Invoice", "Lunch"]
+
+
+def test_email_ids_for_server_ids_ignores_other_folders(db, folder):
+    other = db.get_or_create_folder(folder.account_id, "Archive")
+    incoming(db, other.id, "2")
+
+    assert db.email_ids_for_server_ids(folder.id, ["2"]) == []
+    assert db.email_ids_for_server_ids(folder.id, []) == []
