@@ -11,7 +11,9 @@ from gi.repository import Adw, Gdk, GLib, Gtk, Pango, WebKit
 
 from . import mail_sync
 from .avatar_loader import AvatarLoader
+from .core.mime import invitation as invitations
 from .core.mime import message_parser
+from .core.mime.invitation import Invitation
 from .core.mime.message_parser import Unsubscribe
 from .core.models.attachment import Attachment
 from .core.models.email import Email
@@ -22,6 +24,8 @@ LoadCallback = Callable[[bytes | None, str | None], None]
 # The second argument hides the banner once the list has confirmed; the window
 # only knows the outcome after a round trip, so it can't be done at click time.
 UnsubscribeCallback = Callable[[Unsubscribe, Callable[[], None]], None]
+# (email, invitation, response, done): done(True) once the answer went out.
+InvitationCallback = Callable[[Email, Invitation, str, Callable[[bool], None]], None]
 
 # A mail body may name any scheme, and a registered handler will happily take
 # file:, smb: or tel: from a stranger. Only these three are worth honouring.
@@ -78,6 +82,14 @@ def release_anchor() -> None:
     _anchor = None
 
 
+def _status_label(status: str) -> str:
+    return {
+        invitations.RESPONSE_ACCEPTED: _("Accepted"),
+        invitations.RESPONSE_TENTATIVE: _("Maybe"),
+        invitations.RESPONSE_DECLINED: _("Declined"),
+    }.get(status.upper(), _("No answer yet"))
+
+
 def _build_names(email: Email, delivered_to: str) -> Gtk.Box:
     names = Gtk.Box(
         orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER
@@ -120,6 +132,8 @@ class MessageView(Gtk.Box):
         on_open_attachment: Callable[[Attachment], None],
         on_unsubscribe: UnsubscribeCallback,
         on_rendered: Callable[["MessageView"], None] | None = None,
+        on_respond: InvitationCallback | None = None,
+        own_address: str = "",
         is_expanded: bool = False,
         should_load_remote_images: bool = False,
         delivered_to: str = "",
@@ -134,6 +148,12 @@ class MessageView(Gtk.Box):
         self._on_open_attachment = on_open_attachment
         self._on_rendered = on_rendered
         self._on_unsubscribe = on_unsubscribe
+        self._on_respond = on_respond
+        # The account the message is in: an invitation it organized itself is
+        # shown, but there is nobody to answer.
+        self._own_address = own_address.lower()
+        self._response_buttons: list[Gtk.Button] = []
+        self._response_status: Gtk.Label | None = None
         self._should_load_remote_images = should_load_remote_images
         self._is_loaded = False
         self._is_loading = False
@@ -223,6 +243,7 @@ class MessageView(Gtk.Box):
 
         self._show_details(self.parsed)
         self._show_unsubscribe(self.parsed.unsubscribe)
+        self._show_invitation(self.parsed.invitation)
 
         if self.parsed.html_body:
             self._show_html(self.parsed.html_body)
@@ -281,6 +302,103 @@ class MessageView(Gtk.Box):
             lambda _banner: on_unsubscribe(target, lambda: banner.set_revealed(False)),
         )
         self._body.append(banner)
+
+    # A card above the body: what the event is, and for a request, the three
+    # answers. A cancellation or someone's reply only says what happened.
+    def _show_invitation(self, invitation: Invitation | None) -> None:
+        if invitation is None:
+            return
+
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=SMALL_GUTTER)
+        card.add_css_class("card")
+        inner = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL,
+            spacing=SMALL_GUTTER,
+            margin_top=GUTTER,
+            margin_bottom=GUTTER,
+            margin_start=GUTTER,
+            margin_end=GUTTER,
+        )
+        card.append(inner)
+
+        title = Gtk.Box(spacing=SMALL_GUTTER)
+        title.append(Gtk.Image.new_from_icon_name("x-office-calendar-symbolic"))
+        summary = Gtk.Label(
+            label=invitation.summary or _("Invitation"), xalign=0, wrap=True
+        )
+        summary.add_css_class("heading")
+        title.append(summary)
+        inner.append(title)
+
+        organizer = invitation.organizer_name or invitation.organizer
+        for label, value in (
+            (_("When"), invitations.when_text(invitation.start, invitation.end)),
+            (_("Repeats"), _("Yes") if invitation.is_recurring else ""),
+            (_("Where"), invitation.location),
+            (_("Organizer"), organizer),
+        ):
+            if value:
+                row = Gtk.Label(
+                    label=f"{label}: {value}", xalign=0, wrap=True, selectable=True
+                )
+                row.add_css_class("dim-label")
+                inner.append(row)
+
+        if invitation.method == invitations.METHOD_CANCEL:
+            inner.append(Gtk.Label(label=_("This event was canceled."), xalign=0))
+        elif invitation.method == invitations.METHOD_REPLY:
+            for address, status in invitation.responses.items():
+                inner.append(
+                    Gtk.Label(label=f"{address}: {_status_label(status)}", xalign=0)
+                )
+        elif (
+            invitation.method == invitations.METHOD_REQUEST
+            and self._on_respond
+            and invitation.organizer != self._own_address
+        ):
+            inner.append(self._response_row(invitation))
+
+        self._body.append(card)
+
+    def _response_row(self, invitation: Invitation) -> Gtk.Box:
+        row = Gtk.Box(spacing=SMALL_GUTTER, margin_top=SMALL_GUTTER)
+        for label, response in (
+            (_("Accept"), invitations.RESPONSE_ACCEPTED),
+            (_("Maybe"), invitations.RESPONSE_TENTATIVE),
+            (_("Decline"), invitations.RESPONSE_DECLINED),
+        ):
+            button = Gtk.Button(label=label)
+            if response == invitations.RESPONSE_ACCEPTED:
+                button.add_css_class("suggested-action")
+            button.connect("clicked", self._on_response_clicked, invitation, response)
+            self._response_buttons.append(button)
+            row.append(button)
+        self._response_status = Gtk.Label(xalign=0, hexpand=True)
+        self._response_status.add_css_class("dim-label")
+        row.append(self._response_status)
+        return row
+
+    def _on_response_clicked(
+        self, _button: Gtk.Button, invitation: Invitation, response: str
+    ) -> None:
+        if self._on_respond is None or self._response_status is None:
+            return
+        for button in self._response_buttons:
+            button.set_sensitive(False)
+        self._response_status.set_label(_("Sending…"))
+        status = self._response_status
+
+        def done(is_sent: bool) -> None:
+            if self._is_released:
+                return
+            if is_sent:
+                status.set_label(_status_label(response))
+                return
+            status.set_label("")
+            for button in self._response_buttons:
+                button.set_sensitive(True)
+
+        self._on_respond(self._email, invitation, response, done)
 
     def _show_text(self, text: str) -> None:
         label = Gtk.Label(label=text, xalign=0, yalign=0, wrap=True, selectable=True)

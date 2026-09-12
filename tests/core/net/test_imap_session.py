@@ -1,10 +1,18 @@
 import imaplib
+import socket
 import ssl
+import threading
+import time
 
 import pytest
 
 from postcard.core.net.auth import MECHANISM_XOAUTH2, Credential
-from postcard.core.net.imap_session import FetchedHeader, ImapError, ImapSession
+from postcard.core.net.imap_session import (
+    FetchedHeader,
+    ImapError,
+    ImapSession,
+    special_use_role,
+)
 
 
 class FakeImap:
@@ -314,3 +322,189 @@ def test_connect_gives_starttls_a_verifying_context(monkeypatch):
 
     assert imap.calls[0][0] == "STARTTLS"
     _assert_verifies(imap.calls[0][1])
+
+
+# --- SPECIAL-USE -------------------------------------------------------------
+
+
+def test_list_folders_reads_the_role_a_special_use_attribute_states(monkeypatch):
+    imap = FakeImap()
+    imap.list = lambda: (
+        "OK",
+        [
+            b'(\\HasNoChildren) "/" "INBOX"',
+            b'(\\HasNoChildren \\Sent) "/" "Gesendete Objekte"',
+            b'(\\HasNoChildren \\Trash) "/" "Papierkorb"',
+            b'(\\HasChildren \\Noselect) "/" "[Gmail]"',
+            b'(\\All \\HasNoChildren) "/" "[Gmail]/Alle Nachrichten"',
+        ],
+    )
+
+    folders = connect(monkeypatch, imap).list_folders()
+
+    assert [(folder.name, folder.role) for folder in folders] == [
+        ("INBOX", ""),
+        ("Gesendete Objekte", "sent"),
+        ("Papierkorb", "trash"),
+        ("[Gmail]", ""),
+        ("[Gmail]/Alle Nachrichten", "archive"),
+    ]
+
+
+def test_special_use_attributes_match_regardless_of_case():
+    assert special_use_role("\\HasNoChildren \\JUNK") == "junk"
+    assert special_use_role("\\Marked \\Drafts") == "drafts"
+    assert special_use_role("\\HasNoChildren") == ""
+
+
+# --- previews from a body slice -----------------------------------------------
+
+
+def test_each_message_s_header_and_body_slice_are_kept_together(monkeypatch):
+    reply = (
+        "OK",
+        [
+            (
+                b"1 (UID 42 FLAGS (\\Seen) BODY[HEADER.FIELDS (DATE)] {60}",
+                b"Content-Type: text/plain\r\n" + HEADER_BYTES,
+            ),
+            (b" BODY[TEXT]<0> {11}", b"First mail\r\n"),
+            b")",
+            # Answered body first, and FLAGS after the last literal.
+            (b"2 (UID 43 BODY[TEXT]<0> {12}", b"Second mail\r\n"),
+            (b" BODY[HEADER.FIELDS (DATE)] {40}", b"Subject: Two\r\n\r\n"),
+            b" FLAGS (\\Flagged))",
+        ],
+    )
+    session = connect(monkeypatch, FakeImap(fetch_reply=reply))
+
+    first, second = session.fetch_recent_headers(exists=2, limit=50)
+
+    assert (first.uid, first.subject, first.preview) == ("42", "Lunch", "First mail")
+    assert (second.uid, second.subject, second.preview) == ("43", "Two", "Second mail")
+    assert second.flagged is True
+
+
+def test_the_fetch_asks_for_a_body_slice_without_marking_it_seen(monkeypatch):
+    imap = FakeImap(fetch_reply=("OK", []))
+    session = connect(monkeypatch, imap)
+
+    session.fetch_recent_headers(exists=3, limit=50)
+
+    [(_sequence, items)] = imap.calls
+    assert "BODY.PEEK[TEXT]<0.2048>" in items
+    assert "CONTENT-TRANSFER-ENCODING" in items
+
+
+# --- server search ------------------------------------------------------------
+
+
+def test_search_text_sends_the_query_as_a_utf8_literal(monkeypatch):
+    imap = FakeImap(search_reply=("OK", [b"3 17"]))
+    imap.literal = None
+    session = connect(monkeypatch, imap)
+
+    assert session.search_text('Grüße "Kammer"') == {"3", "17"}
+    assert imap.calls == [("SEARCH", "CHARSET", "UTF-8", "TEXT")]
+    assert imap.literal == 'Grüße "Kammer"'.encode()
+
+
+def test_fetch_headers_by_uid_fetches_exactly_those_uids(monkeypatch):
+    reply = (
+        "OK",
+        [
+            (
+                b"9 (UID 17 FLAGS () BODY[HEADER.FIELDS (SUBJECT)] {20}",
+                b"Subject: Hit\r\n\r\n",
+            )
+        ],
+    )
+    imap = FakeImap(search_reply=reply)
+    session = connect(monkeypatch, imap)
+
+    [header] = session.fetch_headers_by_uid(["17", "3"])
+
+    assert (header.uid, header.subject) == ("17", "Hit")
+    assert imap.calls[0][:2] == ("FETCH", "17,3")
+
+
+def test_fetching_no_uids_asks_nothing(monkeypatch):
+    imap = FakeImap()
+    assert connect(monkeypatch, imap).fetch_headers_by_uid([]) == []
+    assert imap.calls == []
+
+
+# --- IDLE -----------------------------------------------------------------------
+
+
+class SocketImap:
+    """imaplib's send/readline/socket over a real socket, so select() works."""
+
+    def __init__(self, client: socket.socket) -> None:
+        self._client = client
+        self._file = client.makefile("rb")
+        self.sent: list[bytes] = []
+        self.welcome = b"* OK"
+
+    def send(self, data):
+        self.sent.append(data)
+
+    def readline(self):
+        return self._file.readline()
+
+    def socket(self):
+        return self._client
+
+
+@pytest.fixture
+def idle_link(monkeypatch):
+    client, server = socket.socketpair()
+    wakeup, waker = socket.socketpair()
+    imap = SocketImap(client)
+    session = connect(monkeypatch, imap)  # type: ignore[arg-type]
+    yield session, imap, server, wakeup, waker
+    for end in (client, server, wakeup, waker):
+        end.close()
+
+
+def test_idle_reports_a_change_the_server_pushes(idle_link):
+    session, imap, server, wakeup, _waker = idle_link
+    server.sendall(b"+ idling\r\n")
+    result = []
+    waiter = threading.Thread(
+        target=lambda: result.append(session.wait_for_change(30, wakeup))
+    )
+    waiter.start()
+    time.sleep(0.1)
+    server.sendall(b"* OK still here\r\n")
+    time.sleep(0.05)
+    server.sendall(b"* 12 EXISTS\r\nPCIDLE OK IDLE terminated\r\n")
+    waiter.join(5)
+
+    assert result == [True]
+    assert imap.sent == [b"PCIDLE IDLE\r\n", b"DONE\r\n"]
+
+
+def test_idle_ends_quietly_when_nothing_changes(idle_link):
+    session, _imap, server, wakeup, _waker = idle_link
+    server.sendall(b"+ idling\r\nPCIDLE OK IDLE terminated\r\n")
+
+    assert session.wait_for_change(0.1, wakeup) is False
+
+
+def test_a_wakeup_stops_the_wait_at_once(idle_link):
+    session, _imap, server, wakeup, waker = idle_link
+    server.sendall(b"+ idling\r\nPCIDLE OK IDLE terminated\r\n")
+    waker.sendall(b"x")
+
+    started = time.monotonic()
+    assert session.wait_for_change(30, wakeup) is False
+    assert time.monotonic() - started < 5
+
+
+def test_a_refused_idle_is_an_error(idle_link):
+    session, _imap, server, wakeup, _waker = idle_link
+    server.sendall(b"PCIDLE BAD unknown command\r\n")
+
+    with pytest.raises(ImapError, match="IDLE refused"):
+        session.wait_for_change(1, wakeup)

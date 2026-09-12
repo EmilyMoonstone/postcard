@@ -1,0 +1,38 @@
+name: GUI smoke test
+
+# Separate from tests.yml, which release.yml calls: this builds the whole
+# Flatpak, and a release already does that once.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and install the Flatpak
+        run: |
+          # A container has no machine-id, and dbus won't start without one.
+          cat /proc/sys/kernel/random/uuid | tr -d '-' > /etc/machine-id
+          flatpak-builder --force-clean --user --install --disable-rofiles-fuse \
+            build in.gxanshu.postcard.json
+
+      # Broadway needs no display server. WebKit's own bubblewrap sandbox can't
+      # nest inside this container, and the smoke test renders no untrusted
+      # mail, so it is switched off here and nowhere else.
+      - name: Drive the window under Broadway
+        run: |
+          dbus-run-session -- flatpak run \
+            --env=WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 \
+            --command=sh in.gxanshu.postcard -c \
+            'gtk4-broadwayd :27 --port 18127 >/dev/null 2>&1 &
+             sleep 1; GDK_BACKEND=broadway BROADWAY_DISPLAY=:27 python3 -' \
+            < tools/gui_smoke.py

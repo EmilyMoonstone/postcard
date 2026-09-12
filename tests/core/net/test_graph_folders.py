@@ -1,5 +1,10 @@
 from postcard.core.models.folder import FolderRole
-from postcard.core.net.graph_folders import build_tree, list_folders, well_known_ids
+from postcard.core.net.graph_folders import (
+    build_tree,
+    inbox_counts,
+    list_folders,
+    well_known_ids,
+)
 from postcard.core.net.graph_session import BatchResponse
 
 WELL_KNOWN = {
@@ -140,3 +145,14 @@ def test_list_folders_fetches_each_level_of_subfolders_in_one_batch():
     assert [f.id for f in folders] == ["a", "a1", "a2", "a3", "b", "b1"]
     assert len(graph.batched) == 2
     assert graph.batched[0][0].startswith("/me/mailFolders/a/childFolders?$top=250")
+
+
+def test_inbox_counts_reads_total_and_unread():
+    class Graph:
+        def get(self, path, prefer=""):
+            assert (
+                path == "/me/mailFolders/inbox?$select=totalItemCount,unreadItemCount"
+            )
+            return {"totalItemCount": 153, "unreadItemCount": 99}
+
+    assert inbox_counts(Graph()) == (153, 99)  # type: ignore[arg-type]

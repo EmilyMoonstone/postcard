@@ -1,8 +1,9 @@
+import imaplib
 import socket
 import ssl
 
 from postcard.core.net import errors
-from postcard.core.net.errors import classify
+from postcard.core.net.errors import classify, is_connectivity
 from postcard.core.net.graph_session import GraphError
 from postcard.core.net.imap_session import ImapError
 from postcard.core.net.smtp_session import SmtpError
@@ -77,3 +78,19 @@ def test_other_graph_errors_show_graph_s_message():
         False,
         "bad id",
     )
+
+
+# --- is_connectivity -------------------------------------------------------------
+
+
+def test_a_missing_network_is_worth_queueing_for():
+    assert is_connectivity(socket.gaierror("Name or service not known"))
+    assert is_connectivity(TimeoutError())
+    assert is_connectivity(ConnectionResetError())
+    assert is_connectivity(imaplib.IMAP4.abort("socket error: EOF"))
+
+
+def test_a_refusal_or_a_bad_certificate_is_not():
+    assert not is_connectivity(ssl.SSLError("certificate verify failed"))
+    assert not is_connectivity(ImapError("NO [TRYCREATE]"))
+    assert not is_connectivity(GraphError(404, "ErrorItemNotFound", "gone"))

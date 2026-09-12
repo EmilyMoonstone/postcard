@@ -31,8 +31,8 @@ jobs:
 
       - name: Lint and format check
         run: |
-          ruff check src tests
-          ruff format --check src tests
+          ruff check src tests tools
+          ruff format --check src tests tools
 
       - name: Type check
         run: pyright src/postcard

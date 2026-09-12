@@ -7,6 +7,7 @@ from postcard.core.models.account import Account
 from postcard.core.models.conversation import Conversation
 from postcard.core.models.email import Email
 from postcard.core.models.folder import Folder
+from postcard.core.models.pending_action import PendingAction
 from postcard.core.net.auth import Credential
 from postcard.core.net.graph_folders import GraphFolder
 from postcard.core.net.graph_messages import DeltaState, MoveOutcome
@@ -37,6 +38,7 @@ from postcard.mail_sync import (
     inbox_name,
     is_outgoing,
     is_outgoing_folder,
+    mailbox_role,
     mailbox_with_role,
     move_messages,
     parent_mailbox_name,
@@ -592,18 +594,21 @@ class AppendingImapSession(FakeImapSession):
     """An IMAP server that records what was appended where."""
 
     appends: list[tuple[str, bytes]] = []
+    flags: list[str] = []
     capabilities: tuple[str, ...] = ()
 
     def has_capability(self, name):
         return name in type(self).capabilities
 
-    def append(self, mailbox, raw):
+    def append(self, mailbox, raw, flags="\\Seen"):
         type(self).appends.append((mailbox, raw))
+        type(self).flags.append(flags)
 
 
 @pytest.fixture
 def imap(monkeypatch):
     AppendingImapSession.appends = []
+    AppendingImapSession.flags = []
     AppendingImapSession.mailboxes = mailboxes("INBOX", "[Gmail]/Sent Mail")
     AppendingImapSession.capabilities = ()
     monkeypatch.setattr(mail_sync, "SmtpSession", FakeSmtpSession)
@@ -989,6 +994,10 @@ class FakeGraphModules:
         self.calls.append(("move", ids, destination))
         return MoveOutcome(["m1"], 1, "boom")
 
+    def search_headers(self, session, folder_id, query, limit):
+        self.calls.append(("search", folder_id, query, limit))
+        return []
+
     def send_mime(self, session, raw, recipients):
         self.calls.append(("send", raw, recipients))
 
@@ -1061,3 +1070,196 @@ def test_graph_operations_go_to_graph(graph, monkeypatch):
         ("move", ["m1", "m2"], "bin"),
         ("send", b"raw", ["x@y"]),
     ]
+
+
+def test_a_mailbox_role_prefers_the_special_use_attribute():
+    assert mailbox_role(
+        MailboxInfo("Gesendete Objekte", "/", "\\Sent", role="sent")
+    ) is (FolderRole.SENT)
+    assert mailbox_role(MailboxInfo("Sent Items", "/", "")) is FolderRole.SENT
+    assert mailbox_role(MailboxInfo("Gesendete Objekte", "/", "")) is FolderRole.OTHER
+
+
+def test_unread_counts_cover_folders_only_a_special_use_attribute_names(monkeypatch):
+    class CountingImapSession(FakeImapSession):
+        mailboxes = [
+            MailboxInfo("INBOX", "/", ""),
+            MailboxInfo("Papierkorb", "/", "\\Trash", role="trash"),
+            MailboxInfo("Projekte", "/", ""),
+        ]
+
+        def unseen_count(self, mailbox):
+            return 4
+
+    monkeypatch.setattr(mail_sync, "ImapSession", CountingImapSession)
+
+    result = fetch_mailbox(account(), CREDENTIAL)
+
+    assert result.unread_counts == {"Papierkorb": 4}
+
+
+# --- drafts on the server --------------------------------------------------------
+
+
+def test_a_draft_is_appended_to_the_drafts_mailbox_as_a_draft(imap):
+    imap.mailboxes = [
+        MailboxInfo("INBOX", "/", ""),
+        MailboxInfo("Entwürfe", "/", "\\Drafts", role="drafts"),
+    ]
+
+    mail_sync.save_draft(account(), CREDENTIAL, b"Subject: x\n\nbody", ["eve@x"])
+
+    assert imap.appends == [("Entwürfe", b"Bcc: eve@x\nSubject: x\n\nbody")]
+    assert imap.flags == ["\\Draft \\Seen"]
+
+
+def test_a_server_without_a_drafts_mailbox_keeps_the_draft_local(imap):
+    imap.mailboxes = mailboxes("INBOX")
+
+    mail_sync.save_draft(account(), CREDENTIAL, b"raw", [])
+
+    assert imap.appends == []
+
+
+def test_a_graph_draft_goes_to_graph(graph):
+    graph.save_draft = lambda session, raw: graph.calls.append(("draft", raw))
+
+    mail_sync.save_draft(graph_account(), GRAPH_TOKEN, b"raw", [])
+
+    assert graph.calls == [("draft", b"raw")]
+
+
+# --- searching on the server ----------------------------------------------------
+
+
+def test_an_imap_search_fetches_the_newest_matches(monkeypatch):
+    class SearchingImapSession(FakeImapSession):
+        selected: list[str] = []
+        fetched: list[list[str]] = []
+
+        def select(self, mailbox, is_readonly=True):
+            type(self).selected.append(mailbox)
+            return 0
+
+        def search_text(self, query):
+            return {str(uid) for uid in range(1, 80)}
+
+        def fetch_headers_by_uid(self, uids):
+            type(self).fetched.append(uids)
+            return [fetched(uid=uids[0])]
+
+    monkeypatch.setattr(mail_sync, "ImapSession", SearchingImapSession)
+
+    [header] = mail_sync.search_mailbox(account(), CREDENTIAL, "Archive", "lunch")
+
+    assert header.uid == "79"
+    assert SearchingImapSession.selected == ["Archive"]
+    [uids] = SearchingImapSession.fetched
+    assert (len(uids), uids[0], uids[-1]) == (mail_sync.SEARCH_LIMIT, "79", "30")
+
+
+def test_a_graph_search_goes_to_graph(graph):
+    mail_sync.search_mailbox(graph_account(), GRAPH_TOKEN, "in", "lunch")
+
+    assert graph.calls == [("search", "in", "lunch", mail_sync.SEARCH_LIMIT)]
+
+
+# --- replaying actions queued while offline --------------------------------------
+
+
+def queued(action_id, kind="flag", **fields) -> PendingAction:
+    return PendingAction(action_id, 1, kind, "INBOX", ("4",), **fields)
+
+
+def test_replay_runs_each_action_and_reports_them_finished(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        mail_sync, "set_flag", lambda *args: calls.append(("flag", args[2:]))
+    )
+    monkeypatch.setattr(
+        mail_sync,
+        "move_messages",
+        lambda *args: calls.append(("move", args[2:])) or mail_sync.MoveResult(["7"]),
+    )
+
+    finished, error = mail_sync.replay(
+        account(),
+        CREDENTIAL,
+        [
+            queued(1, flag=FLAG_SEEN, should_add=True),
+            queued(2, "move", destination="Archive"),
+        ],
+    )
+
+    assert (finished, error) == ([1, 2], None)
+    assert calls == [
+        ("flag", ("INBOX", ("4",), FLAG_SEEN, True)),
+        ("move", ("INBOX", ["4"], "Archive")),
+    ]
+
+
+def test_an_action_the_server_refuses_is_dropped_and_the_rest_carry_on(monkeypatch):
+    def refuse(*args):
+        raise ImapError("no such message")
+
+    monkeypatch.setattr(mail_sync, "set_flag", refuse)
+    monkeypatch.setattr(
+        mail_sync, "move_messages", lambda *a: mail_sync.MoveResult(["7"])
+    )
+
+    finished, error = mail_sync.replay(
+        account(), CREDENTIAL, [queued(1), queued(2, "move", destination="Archive")]
+    )
+
+    assert (finished, error) == ([1, 2], None)
+
+
+def test_losing_the_network_again_stops_the_replay_and_keeps_the_rest(monkeypatch):
+    def unreachable(*args):
+        raise TimeoutError
+
+    monkeypatch.setattr(mail_sync, "set_flag", unreachable)
+
+    finished, error = mail_sync.replay(account(), CREDENTIAL, [queued(1), queued(2)])
+
+    assert finished == []
+    assert isinstance(error, TimeoutError)
+
+
+def test_a_move_that_fails_part_way_counts_as_refused(monkeypatch):
+    monkeypatch.setattr(
+        mail_sync, "move_messages", lambda *a: mail_sync.MoveResult([], 0, "gone")
+    )
+
+    finished, error = mail_sync.replay(
+        account(), CREDENTIAL, [queued(3, "move", destination="Archive")]
+    )
+
+    assert (finished, error) == ([3], None)
+
+
+# --- answering invitations ------------------------------------------------------
+
+
+def test_an_imap_account_mails_the_reply_to_the_organizer(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        mail_sync, "send_message", lambda *args: sent.append((args[3], args[4]))
+    )
+    reply = b'To: "Pauli, Emily" <emily@example.org>\r\n\r\nics'
+
+    mail_sync.respond_to_invitation(account(), CREDENTIAL, "7", "ACCEPTED", reply)
+
+    assert sent == [(["emily@example.org"], reply)]
+
+
+def test_a_graph_account_answers_through_the_calendar(graph):
+    graph.respond_to_event = lambda session, uid, response: graph.calls.append(
+        ("event", uid, response)
+    )
+
+    mail_sync.respond_to_invitation(
+        graph_account(), GRAPH_TOKEN, "m1", "DECLINED", b"To: x@y\r\n\r\n"
+    )
+
+    assert graph.calls == [("event", "m1", "DECLINED")]

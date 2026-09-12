@@ -1,3 +1,4 @@
+import email
 import logging
 import re
 import threading
@@ -19,11 +20,15 @@ from .core.models.folder import Folder, FolderRole
 # Re-exported: callers reach MessageHeader through mail_sync, which is where it
 # is built. It lives in core.models so core.store can accept one directly.
 from .core.models.message_header import MessageHeader
-from .core.net import graph_folders, graph_messages, graph_send
+from .core.models.pending_action import ACTION_FLAG, ACTION_MOVE, PendingAction
+from .core.net import errors, graph_folders, graph_messages, graph_send
 from .core.net.auth import Credential
+from .core.net.graph_send import with_bcc
 from .core.net.graph_session import GraphSession
 from .core.net.imap_session import (
     ATTR_NOSELECT,
+    FLAG_DRAFT,
+    FLAG_SEEN,
     GMAIL_CAPABILITY,
     FetchedHeader,
     ImapError,
@@ -275,6 +280,29 @@ def fetch_mailbox(
     )
 
 
+# How many server matches a search brings in per folder, newest first.
+SEARCH_LIMIT = 50
+
+
+def search_mailbox(
+    account: Account, credential: Credential, folder_name: str, query: str
+) -> list[MessageHeader]:
+    """The newest messages in a folder the server finds query in.
+
+    Local search only sees mail already synced, and only its sender, subject
+    and preview; the server searches the whole folder, bodies included.
+    """
+    if account.is_graph:
+        return graph_messages.search_headers(
+            GraphSession(credential), folder_name, query, SEARCH_LIMIT
+        )
+    with _pooled_session(account, credential) as session:
+        session.select(folder_name)
+        uids = sorted(session.search_text(query), key=int, reverse=True)
+        raw = session.fetch_headers_by_uid(uids[:SEARCH_LIMIT])
+    return [_to_message_header(fetched) for fetched in raw]
+
+
 def _unread_counts(
     session: ImapSession, mailboxes: list[MailboxInfo], target: str
 ) -> dict[str, int]:
@@ -290,7 +318,7 @@ def _unread_counts(
     for mailbox in mailboxes:
         if mailbox.name == target or ATTR_NOSELECT in mailbox.flags:
             continue
-        if role_for_folder(mailbox.name) is FolderRole.OTHER:
+        if mailbox_role(mailbox) is FolderRole.OTHER:
             continue
         try:
             counts[mailbox.name] = session.unseen_count(mailbox.name)
@@ -371,6 +399,7 @@ def _to_message_header(fetched: FetchedHeader) -> MessageHeader:
         date=_iso_date(fetched.date),
         is_unread=not fetched.seen,
         is_starred=fetched.flagged,
+        preview=fetched.preview,
         message_id=fetched.message_id,
         in_reply_to=fetched.in_reply_to,
         references=fetched.references,
@@ -493,6 +522,111 @@ def send_message(
         )
 
 
+def replay(
+    account: Account, credential: Credential, actions: list[PendingAction]
+) -> tuple[list[int], BaseException | None]:
+    """Run queued actions in order; return the ids that are finished with.
+
+    An action the server refused is finished too -- the message is gone, or
+    the folder is -- and the next sync shows the server's truth. Losing the
+    network again stops the replay, and the error comes back so the caller
+    can keep the rest queued.
+    """
+    finished: list[int] = []
+    for action in actions:
+        try:
+            _replay_one(account, credential, action)
+        except Exception as error:
+            if errors.is_connectivity(error):
+                close_sessions(account.id)
+                return finished, error
+            logger.warning(
+                "dropping a queued %s of %d message(s) in %s (account %s)",
+                action.kind,
+                len(action.uids),
+                action.folder_name,
+                account.email,
+                exc_info=True,
+            )
+        finished.append(action.id)
+    return finished, None
+
+
+def _replay_one(
+    account: Account, credential: Credential, action: PendingAction
+) -> None:
+    if action.kind == ACTION_FLAG:
+        set_flag(
+            account,
+            credential,
+            action.folder_name,
+            action.uids,
+            action.flag,
+            action.should_add,
+        )
+    elif action.kind == ACTION_MOVE:
+        result = move_messages(
+            account,
+            credential,
+            action.folder_name,
+            list(action.uids),
+            action.destination,
+        )
+        if result.error is not None:
+            raise ImapError(result.error)
+
+
+def respond_to_invitation(
+    account: Account,
+    credential: Credential,
+    message_uid: str,
+    response: str,
+    reply: bytes,
+) -> None:
+    """Accept, tentatively accept or decline an invitation.
+
+    Exchange answers through the event, which also updates the account's own
+    calendar; everyone else gets the iMIP reply mailed to the organizer, which
+    is what Google Calendar, Thunderbird and Outlook all read.
+    """
+    if account.is_graph and message_uid:
+        graph_messages.respond_to_event(GraphSession(credential), message_uid, response)
+        return
+    organizer = str(email.message_from_bytes(reply)["To"] or "")
+    send_message(account, credential, account.email, [parseaddr(organizer)[1]], reply)
+
+
+def save_draft(
+    account: Account, credential: Credential, raw: bytes, bcc: list[str]
+) -> None:
+    """Put a draft on the server, so it isn't only on this machine.
+
+    Bcc goes into the uploaded copy's headers: a draft is only ever seen by
+    its author, and without it reopening the draft elsewhere loses them.
+    """
+    raw = with_bcc(raw, bcc)
+    if account.is_graph:
+        graph_send.save_draft(GraphSession(credential), raw)
+        return
+    with _pooled_session(account, credential) as session:
+        drafts = next(
+            (
+                mailbox.name
+                for mailbox in session.list_folders()
+                if mailbox_role(mailbox) is FolderRole.DRAFTS
+            ),
+            None,
+        )
+        if drafts is None:
+            logger.warning(
+                "no Drafts mailbox on %s (account %s); the draft stays local",
+                account.imap_host,
+                account.email,
+            )
+            return
+        session.append(drafts, raw, f"{FLAG_DRAFT} {FLAG_SEEN}")
+
+
 class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
     """Refuses a redirect that would leave https.
 
@@ -539,8 +673,13 @@ def _append_to_sent(account: Account, credential: Credential, raw: bytes) -> Non
     with _pooled_session(account, credential) as session:
         if session.has_capability(GMAIL_CAPABILITY):
             return
-        sent = mailbox_with_role(
-            (mailbox.name for mailbox in session.list_folders()), FolderRole.SENT
+        sent = next(
+            (
+                mailbox.name
+                for mailbox in session.list_folders()
+                if mailbox_role(mailbox) is FolderRole.SENT
+            ),
+            None,
         )
         if sent is None:
             logger.warning(
@@ -564,6 +703,14 @@ def role_for_folder(name: str) -> FolderRole:
         if pattern.search(name):
             return role
     return FolderRole.OTHER
+
+
+def mailbox_role(mailbox: MailboxInfo) -> FolderRole:
+    """A listed mailbox's role: stated by the server, else inferred from its name."""
+    try:
+        return FolderRole(mailbox.role)
+    except ValueError:
+        return role_for_folder(mailbox.name)
 
 
 def folder_role(folder: Folder) -> FolderRole:
@@ -685,9 +832,7 @@ def creation_order(mailboxes: list[MailboxInfo]) -> list[MailboxInfo]:
 def icon_for_mailbox(mailbox: MailboxInfo) -> str:
     if ATTR_NOSELECT in mailbox.flags:
         return "folder-symbolic"
-    if mailbox.role:
-        return icon_for_role(FolderRole(mailbox.role))
-    return icon_for_folder(mailbox.name)
+    return icon_for_role(mailbox_role(mailbox))
 
 
 def display_name_for_folder(name: str, delimiter: str | None = None) -> str:

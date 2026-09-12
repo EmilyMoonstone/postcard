@@ -47,6 +47,7 @@ postcard_sources = [
   'postcard/preferences_dialog.py',
   'postcard/tray.py',
   'postcard/mail_sync.py',
+  'postcard/mail_watch.py',
   'postcard/folder_row.py',
 ]
 python_installation.install_sources(postcard_sources, subdir: 'postcard')
@@ -71,6 +72,7 @@ postcard_core_models_sources = [
   'postcard/core/models/mailbox.py',
   'postcard/core/models/email.py',
   'postcard/core/models/message_header.py',
+  'postcard/core/models/pending_action.py',
   'postcard/core/models/conversation.py',
   'postcard/core/models/attachment.py',
 ]
@@ -97,7 +99,9 @@ python_installation.install_sources(postcard_core_net_sources, subdir: 'postcard
 
 postcard_core_mime_sources = [
   'postcard/core/mime/__init__.py',
+  'postcard/core/mime/invitation.py',
   'postcard/core/mime/message_parser.py',
+  'postcard/core/mime/preview.py',
 ]
 python_installation.install_sources(postcard_core_mime_sources, subdir: 'postcard/core/mime')
 

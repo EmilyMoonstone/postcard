@@ -3,8 +3,13 @@ import email
 import imaplib
 import logging
 import re
+import select
+import socket
 from email import policy
 from typing import NamedTuple
+
+from ..mime.preview import PREVIEW_BYTES, preview_text
+from ..models.folder import FolderRole
 
 # Re-exported (the "as" form): MailboxInfo is what list_folders returns, and
 # lives in core.models only so the Graph backend can build one too.
@@ -22,10 +27,46 @@ STATUS_OK = "OK"
 # so both halves have to name them from one place.
 FLAG_SEEN = "\\Seen"
 FLAG_FLAGGED = "\\Flagged"
+FLAG_DRAFT = "\\Draft"
 
 # A LIST attribute, not a message flag: the mailbox is a container that cannot
 # hold mail (Gmail's "[Gmail]"), so it is shown but never selected.
 ATTR_NOSELECT = "\\Noselect"
+
+# RFC 6154 SPECIAL-USE attributes, which a server puts on LIST replies to say
+# what a mailbox is for whatever it is called -- the reliable answer for a
+# "Gesendete Objekte". \All is Gmail's All Mail, which the app has always
+# treated as the archive.
+SPECIAL_USE_ROLES: dict[str, FolderRole] = {
+    "\\sent": FolderRole.SENT,
+    "\\drafts": FolderRole.DRAFTS,
+    "\\trash": FolderRole.TRASH,
+    "\\junk": FolderRole.JUNK,
+    "\\archive": FolderRole.ARCHIVE,
+    "\\all": FolderRole.ARCHIVE,
+    "\\flagged": FolderRole.STARRED,
+}
+
+
+def special_use_role(flags: str) -> str:
+    """The FolderRole a LIST reply's attributes state, or "" when none does."""
+    for attribute in flags.split():
+        role = SPECIAL_USE_ROLES.get(attribute.lower())
+        if role is not None:
+            return role
+    return ""
+
+
+# Advertised by servers that can push changes to an open mailbox (RFC 2177).
+IDLE_CAPABILITY = "IDLE"
+
+# The tag of the one command imaplib doesn't know how to send for us.
+_IDLE_TAG = b"PCIDLE"
+
+# Untagged replies that mean the selected mailbox changed. RECENT is left
+# out: a server sends it beside EXISTS, never alone.
+_MAILBOX_CHANGE = re.compile(rb"^\* \d+ (EXISTS|EXPUNGE|FETCH)\b", re.IGNORECASE)
+
 
 # Gmail files its own copy of everything sent through it. This capability is how
 # it identifies itself, so we don't append a second copy on top.
@@ -51,6 +92,47 @@ class FetchedHeader(NamedTuple):
     references: str
     seen: bool
     flagged: bool
+    preview: str = ""
+
+
+# The headers a sync reads. Content-Type and Content-Transfer-Encoding are only
+# there to decode the body slice fetched beside them into a preview.
+_HEADER_FIELDS = (
+    "DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES "
+    "CONTENT-TYPE CONTENT-TRANSFER-ENCODING"
+)
+
+# A FETCH reply's first line for a message starts with its sequence number;
+# the lines for its later literals start with a space.
+_MESSAGE_START = re.compile(r"^\d+ \(")
+
+
+def fetch_items(payload: list) -> list[tuple[str, bytes, bytes]]:
+    """Group imaplib's flat FETCH reply into (metadata, header, body) per message.
+
+    imaplib hands back one (meta, literal) tuple per literal, so a message
+    fetched with both a header and a body slice spans two tuples, and any text
+    after the last literal (some servers put FLAGS there) comes as plain bytes.
+    Which literal is which is read from the item name before it, since servers
+    don't all answer in the order the items were asked for.
+    """
+    messages: list[list] = []
+    for item in payload:
+        if isinstance(item, bytes):
+            if messages:
+                messages[-1][0] += item.decode("utf-8", "replace")
+            continue
+        if not isinstance(item, tuple):
+            continue
+        meta = item[0].decode("utf-8", "replace")
+        if _MESSAGE_START.match(meta) or not messages:
+            messages.append(["", b"", b""])
+        current = messages[-1]
+        current[0] += meta
+        item_name = meta[meta.upper().rfind("BODY[") :].upper()
+        slot = 2 if item_name.startswith("BODY[TEXT]") else 1
+        current[slot] = item[1]
+    return [(meta, header, body) for meta, header, body in messages]
 
 
 def decode_mailbox_name(name: str) -> str:
@@ -157,6 +239,46 @@ class ImapSession:
             raise ImapError(f"not connected to {self._host}:{self._port}")
         return self._imap
 
+    def wait_for_change(self, seconds: float, wakeup: socket.socket) -> bool:
+        """Wait in IDLE until the selected mailbox changes; True if it did.
+
+        Returns False once `seconds` pass, or as soon as anything is written
+        to `wakeup` -- which is how another thread stops the wait without
+        touching this connection. imaplib has no IDLE before Python 3.14, so
+        the command is spoken by hand; select() on the socket rather than a
+        socket timeout, because a timed-out read leaves imaplib's buffered
+        reader unusable. A reply the reader had already buffered is only seen
+        at DONE, so a change can be reported up to `seconds` late -- in
+        practice servers send the continuation on its own.
+        """
+        imap = self._require_imap()
+        imap.send(_IDLE_TAG + b" IDLE\r\n")
+        continuation = imap.readline()
+        if not continuation.startswith(b"+"):
+            raise ImapError(f"IDLE refused: {continuation!r}")
+
+        is_changed = False
+        connection = imap.socket()
+        pending = getattr(connection, "pending", lambda: 0)
+        while not is_changed:
+            if not pending():
+                readable, _, _ = select.select([connection, wakeup], [], [], seconds)
+                if connection not in readable:
+                    break
+            line = imap.readline()
+            if not line:
+                raise ImapError(f"{self._host} closed the connection during IDLE")
+            is_changed = bool(_MAILBOX_CHANGE.match(line))
+
+        imap.send(b"DONE\r\n")
+        while True:
+            line = imap.readline()
+            if not line:
+                raise ImapError(f"{self._host} closed the connection ending IDLE")
+            if line.startswith(_IDLE_TAG):
+                return is_changed or bool(_MAILBOX_CHANGE.match(line))
+            is_changed = is_changed or bool(_MAILBOX_CHANGE.match(line))
+
     def list_folders(self) -> list[MailboxInfo]:
         """Return every listed mailbox.
 
@@ -177,7 +299,11 @@ class ImapSession:
             delim_raw = match.group(2)
             name = _unquote(match.group(3).strip())
             delimiter = "" if delim_raw == "NIL" else _unquote(delim_raw)
-            result.append(MailboxInfo(name, delimiter, flags_part))
+            result.append(
+                MailboxInfo(
+                    name, delimiter, flags_part, role=special_use_role(flags_part)
+                )
+            )
         return result
 
     def select(self, mailbox: str, is_readonly: bool = True) -> int:
@@ -221,19 +347,29 @@ class ImapSession:
             raise ImapError(f"no UNSEEN in the status of {mailbox}: {payload}")
         return int(match.group(1))
 
+    def refresh_capabilities(self) -> None:
+        """Ask again after signing in: a server may only offer some then, and
+        imaplib keeps what it heard in the greeting."""
+        imap = self._require_imap()
+        status, payload = imap.capability()
+        if status == STATUS_OK and payload and isinstance(payload[0], bytes):
+            imap.capabilities = tuple(
+                payload[0].decode("ascii", "replace").upper().split()
+            )
+
     def has_capability(self, name: str) -> bool:
         """Whether the server advertises a capability. imaplib upper-cases the
         ones it parsed, so the comparison has to as well."""
         return name.upper() in self._require_imap().capabilities
 
-    def append(self, mailbox: str, raw: bytes) -> None:
+    def append(self, mailbox: str, raw: bytes, flags: str = FLAG_SEEN) -> None:
         """Upload a message into a mailbox, without selecting it first.
 
-        Stored \\Seen: this is our own copy of something we just sent, and
-        arriving as unread mail would be wrong.
+        Stored \\Seen by default: it is our own copy of something we sent or
+        wrote, and arriving as unread mail would be wrong.
         """
         status, payload = self._require_imap().append(
-            _quote_mailbox(mailbox), FLAG_SEEN, None, raw
+            _quote_mailbox(mailbox), flags, None, raw
         )
         if status != STATUS_OK:
             raise ImapError(f"could not append to {mailbox}: {payload}")
@@ -247,8 +383,23 @@ class ImapSession:
 
     def search_all_uids(self) -> set[str]:
         """Return every UID in the currently selected mailbox."""
+        return self._uid_search("ALL")
+
+    def search_text(self, query: str) -> set[str]:
+        """UIDs in the selected mailbox whose headers or body contain query.
+
+        Sent as a UTF-8 literal, so quotes, backslashes and umlauts in what the
+        user typed need no escaping and can't break out of the command.
+        """
+        imap = self._require_imap()
+        # typeshed says str, but imaplib writes the literal to the socket as is,
+        # and only bytes go through.
+        imap.literal = query.encode("utf-8")  # pyright: ignore[reportAttributeAccessIssue]
+        return self._uid_search("CHARSET", "UTF-8", "TEXT")
+
+    def _uid_search(self, *criteria: str) -> set[str]:
         try:
-            status, payload = self._require_imap().uid("SEARCH", "ALL")
+            status, payload = self._require_imap().uid("SEARCH", *criteria)
         except imaplib.IMAP4.error as error:
             raise ImapError(f"search failed: {error}") from error
 
@@ -321,23 +472,34 @@ class ImapSession:
         start = max(1, end - limit + 1)  # exists=1000,limit=50,offset=50 -> 901:950
         status, payload = self._require_imap().fetch(
             f"{start}:{end}",
-            # BODY.PEEK[...] = look at the header WITHOUT marking it \Seen.
-            "(UID FLAGS BODY.PEEK[HEADER.FIELDS "
-            "(DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES)])",
+            # BODY.PEEK[...] = look WITHOUT marking the message \Seen. The
+            # partial TEXT is only the first bytes, for the preview line.
+            f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({_HEADER_FIELDS})] "
+            f"BODY.PEEK[TEXT]<0.{PREVIEW_BYTES}>)",
         )
         if status != STATUS_OK:
             raise ImapError(f"fetch failed: {payload}")
+        return [
+            self._parse(meta, header_bytes, body)
+            for meta, header_bytes, body in fetch_items(payload)
+        ]
 
-        messages: list[FetchedHeader] = []
-        for item in payload:
-            # imaplib hands each message back as a tuple of metadata bytes
-            # followed by header bytes.  The stray ")" closing lines arrive as
-            # plain bytes instead — we skip those.
-            if not isinstance(item, tuple):
-                continue
-            meta, header_bytes = item
-            messages.append(self._parse(meta.decode("utf-8", "replace"), header_bytes))
-        return messages
+    def fetch_headers_by_uid(self, uids: list[str]) -> list[FetchedHeader]:
+        """The same rows as fetch_recent_headers, for a chosen set of UIDs."""
+        if not uids:
+            return []
+        status, payload = self._require_imap().uid(
+            "FETCH",
+            ",".join(uids),
+            f"(UID FLAGS BODY.PEEK[HEADER.FIELDS ({_HEADER_FIELDS})] "
+            f"BODY.PEEK[TEXT]<0.{PREVIEW_BYTES}>)",
+        )
+        if status != STATUS_OK:
+            raise ImapError(f"fetch failed: {payload}")
+        return [
+            self._parse(meta, header_bytes, body)
+            for meta, header_bytes, body in fetch_items(payload)
+        ]
 
     def fetch_message(self, uid: str) -> bytes:
         """Fetch one full message (headers + body) by its stable UID.
@@ -354,7 +516,7 @@ class ImapSession:
 
         raise ImapError(f"no message body returned for uid {uid}")
 
-    def _parse(self, meta: str, header_bytes: bytes) -> FetchedHeader:
+    def _parse(self, meta: str, header_bytes: bytes, body: bytes) -> FetchedHeader:
         uid = re.search(r"UID (\d+)", meta)
         flags = re.search(r"FLAGS \(([^)]*)\)", meta)
         flag_text = flags.group(1) if flags else ""
@@ -380,4 +542,5 @@ class ImapSession:
             references=header("References"),
             seen=FLAG_SEEN in flag_text,
             flagged=FLAG_FLAGGED in flag_text,
+            preview=preview_text(header_bytes, body) if body else "",
         )

@@ -148,16 +148,23 @@ def build_mime_message(
     return msg
 
 
-def extract_recipients(raw: bytes) -> list[str]:
-    """Read the To/Cc headers back out of a stored message, for retrying from
-    Outbox. Bcc addresses are never written to the stored message, so a Bcc'd
-    recipient is lost if the original send failed and is retried later.
+def message_id(raw: bytes) -> str:
+    """A stored message's Message-ID, "" when it has none."""
+    return str(email.message_from_bytes(raw)["Message-ID"] or "").strip()
+
+
+def extract_recipients(raw: bytes, bcc: list[str] | None = None) -> list[str]:
+    """Every recipient of a stored message, for retrying it from the Outbox.
+
+    To and Cc come out of its headers. Bcc addresses are never written into
+    the stored message, so the caller passes the ones kept beside it.
     """
     headers = email.message_from_bytes(raw)
     addrs = email.utils.getaddresses(
         [str(headers["To"] or ""), str(headers["Cc"] or "")]
     )
-    return [addr for _, addr in addrs if addr]
+    recipients = [addr for _, addr in addrs if addr]
+    return recipients + [addr for addr in bcc or [] if addr not in recipients]
 
 
 @dataclass(frozen=True)

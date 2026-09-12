@@ -50,6 +50,10 @@ max-args = 5
 # into the internals of the thing under test -- the suite already covers
 # module-private helpers like _arrival_key and _fts_query.
 "tests/*" = ["ARG", "SLF001"]
+# The GUI smoke test drives the window through the handlers its signals and
+# timers call, which are private by name; and it has to point GLib at a
+# throwaway data directory before anything imports gi.
+"tools/gui_smoke.py" = ["E402", "SLF001"]
 
 # --- Permanent carve-outs, with the reason -----------------------------------
 # Account/Email/Folder are GObject.Object subclasses because Gio.ListStore only

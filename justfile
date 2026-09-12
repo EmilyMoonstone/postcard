@@ -71,6 +71,14 @@ run-debug: build
 inspect: build
     flatpak run --env=GTK_DEBUG=interactive "{{app-id}}"
 
+# Build, then drive the real window headless under Broadway and fail on any
+# exception in the GTK layer -- the part the unit tests can't import.
+smoke: build
+    flatpak run --command=sh "{{app-id}}" -c \
+        'gtk4-broadwayd :27 --port 18127 >/dev/null 2>&1 & broadway=$!; \
+         sleep 1; GDK_BACKEND=broadway BROADWAY_DISPLAY=:27 python3 -; \
+         status=$?; kill $broadway; exit $status' < tools/gui_smoke.py
+
 # ----------------------------------------------------------------------------
 # Package & lint
 # ----------------------------------------------------------------------------
@@ -105,13 +113,13 @@ site port="8000":
 
 # Format the codebase with ruff.
 fmt:
-    {{python}} -m ruff format src tests
+    {{python}} -m ruff format src tests tools
 
 # Lint, format-check and type-check the Python source. Enforces
 # .claude/skills/coding-standards — see [tool.ruff.lint] in pyproject.toml.
 check:
-    {{python}} -m ruff check src tests
-    {{python}} -m ruff format --check src tests
+    {{python}} -m ruff check src tests tools
+    {{python}} -m ruff format --check src tests tools
     {{python}} -m pyright src/postcard
 
 # `build` and `bundle` depend on `test`, so gating `test` on `check` means a

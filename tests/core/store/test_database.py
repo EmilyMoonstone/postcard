@@ -4,6 +4,11 @@ import pytest
 
 from postcard.core.models.email import Email
 from postcard.core.models.message_header import MessageHeader
+from postcard.core.models.pending_action import (
+    ACTION_FLAG,
+    ACTION_MOVE,
+    PendingAction,
+)
 from postcard.core.store.database import (
     Database,
     _arrival_key,
@@ -645,3 +650,146 @@ def test_arrival_key_orders_opaque_graph_ids_by_date():
     newer = _email(server_id="AAMkB=", date="2026-09-02T08:00:00+00:00")
 
     assert _arrival_key(older) < _arrival_key(newer)
+
+
+# --- local copies of sent mail ------------------------------------------------
+
+
+def local_sent_copy(db, folder_id, message_id="<m1@example.com>"):
+    row = db.save_email(
+        folder_id,
+        sender="me@example.com",
+        subject="Hello",
+        preview="Hello",
+        date="2026-09-12T10:00:00+02:00",
+        is_unread=False,
+        message_id=message_id,
+    )
+    db.save_raw_message(row.id, b"Message-ID: <m1@example.com>\n\nbody")
+    return row
+
+
+def test_the_server_copy_of_a_sent_message_takes_over_the_local_one(db, folder):
+    local = local_sent_copy(db, folder.id)
+
+    is_new = incoming(
+        db, folder.id, "42", message_id="<m1@example.com>", is_unread=False
+    )
+
+    [stored] = db.emails_in_folder(folder.id)
+    assert is_new is False
+    assert (stored.id, stored.server_id) == (local.id, "42")
+    assert db.get_raw_message(stored.id) == b"Message-ID: <m1@example.com>\n\nbody"
+
+
+def test_a_message_with_another_message_id_is_stored_beside_the_local_copy(db, folder):
+    local_sent_copy(db, folder.id)
+
+    assert incoming(db, folder.id, "43", message_id="<other@example.com>") is True
+    assert len(db.emails_in_folder(folder.id)) == 2
+
+
+def test_a_header_without_a_message_id_adopts_nothing(db, folder):
+    local_sent_copy(db, folder.id, message_id="")
+
+    assert incoming(db, folder.id, "44", message_id="") is True
+    assert len(db.emails_in_folder(folder.id)) == 2
+
+
+def test_a_copy_already_matched_to_a_server_row_is_not_adopted_twice(db, folder):
+    local_sent_copy(db, folder.id)
+    incoming(db, folder.id, "42", message_id="<m1@example.com>")
+
+    # The same UID again is an ordinary flag update, not a second adoption.
+    assert incoming(db, folder.id, "42", message_id="<m1@example.com>") is False
+    assert [mail.server_id for mail in db.emails_in_folder(folder.id)] == ["42"]
+
+
+def test_a_sync_fills_in_a_preview_and_search_finds_it(db, folder):
+    incoming(db, folder.id, "7", subject="Treffen", preview="")
+    incoming(
+        db, folder.id, "7", subject="Treffen", preview="Kammersitzung am Donnerstag"
+    )
+
+    [stored] = db.emails_in_folder(folder.id)
+    assert stored.preview == "Kammersitzung am Donnerstag"
+    assert [c.subject for c in db.search_conversations([folder.id], "Kammer")] == [
+        "Treffen"
+    ]
+
+
+def test_a_sync_without_a_preview_keeps_the_one_stored(db, folder):
+    incoming(db, folder.id, "7", preview="Kept")
+    incoming(db, folder.id, "7", preview="")
+
+    assert db.emails_in_folder(folder.id)[0].preview == "Kept"
+
+
+def test_a_queued_message_keeps_its_bcc_recipients(db, folder):
+    row = db.save_email(
+        folder.id, sender="me", subject="s", preview="", date="", is_unread=False
+    )
+
+    db.save_bcc(row.id, ["eve@example.com", "mallory@example.com"])
+
+    assert db.bcc_for(row.id) == ["eve@example.com", "mallory@example.com"]
+
+
+def test_a_message_without_bcc_has_none(db, folder):
+    row = db.save_email(
+        folder.id, sender="me", subject="s", preview="", date="", is_unread=False
+    )
+
+    assert db.bcc_for(row.id) == []
+
+
+def test_a_server_hit_joins_the_search_results_though_fts_misses_it(db, folder):
+    incoming(db, folder.id, "1", subject="Lunch", preview="see you at one")
+    incoming(db, folder.id, "2", subject="Invoice", preview="attached")
+    [hit] = db.email_ids_for_server_ids(folder.id, ["2"])
+
+    subjects = [c.subject for c in db.search_conversations([folder.id], "lunch", [hit])]
+
+    assert sorted(subjects) == ["Invoice", "Lunch"]
+
+
+def test_email_ids_for_server_ids_ignores_other_folders(db, folder):
+    other = db.get_or_create_folder(folder.account_id, "Archive")
+    incoming(db, other.id, "2")
+
+    assert db.email_ids_for_server_ids(folder.id, ["2"]) == []
+    assert db.email_ids_for_server_ids(folder.id, []) == []
+
+
+# --- actions queued while offline -------------------------------------------------
+
+
+def test_queued_actions_come_back_in_order_and_go_once_done(db, folder):
+    flag = PendingAction(
+        0, folder.account_id, ACTION_FLAG, "INBOX", ("4", "9"), "\\Seen", True
+    )
+    move = PendingAction(
+        0, folder.account_id, ACTION_MOVE, "INBOX", ("4",), destination="Archive"
+    )
+    db.queue_action(flag)
+    db.queue_action(move)
+
+    first, second = db.pending_actions(folder.account_id)
+    assert (first.kind, first.uids, first.flag, first.should_add) == (
+        "flag",
+        ("4", "9"),
+        "\\Seen",
+        True,
+    )
+    assert (second.kind, second.destination) == ("move", "Archive")
+
+    db.delete_pending_actions([first.id])
+    assert [a.id for a in db.pending_actions(folder.account_id)] == [second.id]
+
+
+def test_removing_an_account_drops_its_queued_actions(db, folder):
+    db.queue_action(PendingAction(0, folder.account_id, ACTION_FLAG, "INBOX", ("4",)))
+
+    db.delete_account(folder.account_id)
+
+    assert db.pending_actions(folder.account_id) == []

@@ -6,6 +6,7 @@ from email.message import EmailMessage
 from email.policy import default as default_policy
 
 from ..models.attachment import Attachment
+from .invitation import Invitation, find_invitation
 
 # RFC 2369 wraps each unsubscribe target in angle brackets and separates them
 # with commas, which may also appear inside a target -- so match the brackets.
@@ -33,6 +34,7 @@ class ParsedMessage:
     bcc: list[str] = field(default_factory=list)
     date: str = ""
     unsubscribe: Unsubscribe | None = None
+    invitation: Invitation | None = None
 
 
 def parse_message(raw: bytes) -> ParsedMessage:
@@ -47,6 +49,7 @@ def parse_message(raw: bytes) -> ParsedMessage:
     result.bcc = _addresses(msg, "Bcc")
     result.date = _format_date(msg.get("Date"))
     result.unsubscribe = _unsubscribe(msg)
+    result.invitation = find_invitation(msg)
 
     for part in msg.walk():
         if part.is_multipart():
@@ -61,6 +64,8 @@ def parse_message(raw: bytes) -> ParsedMessage:
             result.text_body = part.get_content()
         elif content_type == "text/html" and result.html_body is None:
             result.html_body = part.get_content()
+        elif content_type == "text/calendar" and result.invitation is not None:
+            continue  # shown as the invitation card, not as a nameless file
         else:
             # anything else (an inline image, unrecognised type) -- treat
             # if as an attachment rather than silently dropping it

@@ -7,6 +7,8 @@ from postcard.core.net.graph_messages import (
     folder_ids,
     message_header,
     move,
+    respond_to_event,
+    search_headers,
     set_flags,
 )
 from postcard.core.net.graph_session import BatchResponse, GraphError
@@ -205,3 +207,52 @@ def test_a_move_that_all_succeeds_has_no_failure():
     outcome = move(graph, ["a"], "dest")  # type: ignore[arg-type]
 
     assert (outcome.destination_ids, outcome.failed_index) == (["a"], None)
+
+
+def test_search_headers_asks_graph_to_search_the_folder():
+    graph = FakeGraph(get={"value": [ITEM]})
+
+    [header] = search_headers(graph, "in", 'say "hi" there', 25)  # type: ignore[arg-type]
+
+    assert header.uid == "AAMk1"
+    path = graph.paths[0]
+    assert "$search=%22say%20%20hi%20%20there%22" in path
+    assert "$top=25" in path
+    assert "$orderby" not in path
+
+
+def test_an_empty_search_asks_nothing():
+    graph = FakeGraph()
+
+    assert search_headers(graph, "in", ' " ', 25) == []  # type: ignore[arg-type]
+    assert graph.paths == []
+
+
+class EventGraph:
+    def __init__(self, event):
+        self._event = event
+        self.sent = []
+
+    def get(self, path, prefer=""):
+        self.path = path
+        return {"id": "m", "event": self._event}
+
+    def send(self, method, path, payload=None):
+        self.sent.append((method, path, payload))
+        return {}
+
+
+def test_an_invitation_is_answered_through_its_event():
+    graph = EventGraph({"id": "ev/1"})
+
+    respond_to_event(graph, "m1", "TENTATIVE")  # type: ignore[arg-type]
+
+    assert "$expand=microsoft.graph.eventMessage/event($select=id)" in graph.path
+    assert graph.sent == [
+        ("POST", "/me/events/ev%2F1/tentativelyAccept", {"sendResponse": True})
+    ]
+
+
+def test_a_message_without_an_event_cannot_be_answered_through_graph():
+    with pytest.raises(GraphError, match="carries no event"):
+        respond_to_event(EventGraph(None), "m1", "ACCEPTED")  # type: ignore[arg-type]

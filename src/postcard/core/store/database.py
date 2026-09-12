@@ -17,6 +17,7 @@ from ..models.conversation import Conversation
 from ..models.email import Email
 from ..models.folder import Folder
 from ..models.message_header import MessageHeader
+from ..models.pending_action import PendingAction
 
 # Every column _email_from_row reads
 _EMAIL_COLUMNS = """
@@ -97,6 +98,22 @@ MIGRATIONS = [
     """
     ALTER TABLE folders ADD COLUMN role TEXT NOT NULL DEFAULT '';
     ALTER TABLE folders ADD COLUMN label TEXT NOT NULL DEFAULT '';
+    """,
+    # Bcc never goes into the stored message, so a queued one has to remember
+    # it here or a retry from the Outbox would drop those recipients.
+    "ALTER TABLE emails ADD COLUMN bcc TEXT NOT NULL DEFAULT ''",
+    # Flag changes and moves made offline, replayed in id order on reconnect.
+    """
+    CREATE TABLE pending_actions (
+        id INTEGER PRIMARY KEY,
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        kind TEXT NOT NULL,
+        folder_name TEXT NOT NULL,
+        uids TEXT NOT NULL,
+        flag TEXT NOT NULL DEFAULT '',
+        should_add INTEGER NOT NULL DEFAULT 0,
+        destination TEXT NOT NULL DEFAULT ''
+    );
     """,
 ]
 
@@ -195,6 +212,17 @@ class Database:
                 INSERT INTO emails_fts(emails_fts, rowid, sender, subject, preview)
                 VALUES ('delete', old.id, old.sender, old.subject, old.preview);
             END;
+
+            -- A sync fills in the preview of a row stored without one. WHEN,
+            -- because the upsert names the column on every sync of every row.
+            CREATE TRIGGER IF NOT EXISTS emails_fts_update
+            AFTER UPDATE OF preview ON emails
+            WHEN old.preview IS NOT new.preview BEGIN
+                INSERT INTO emails_fts(emails_fts, rowid, sender, subject, preview)
+                VALUES ('delete', old.id, old.sender, old.subject, old.preview);
+                INSERT INTO emails_fts(rowid, sender, subject, preview)
+                VALUES (new.id, new.sender, new.subject, new.preview);
+            END;
             """
         )
 
@@ -292,6 +320,9 @@ class Database:
             (account_id,),
         )
         self._conn.execute("DELETE FROM folders WHERE account_id = ?", (account_id,))
+        self._conn.execute(
+            "DELETE FROM pending_actions WHERE account_id = ?", (account_id,)
+        )
         self._conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         self._conn.commit()
 
@@ -353,8 +384,9 @@ class Database:
         )
         self._conn.commit()
 
-    # Written on every sync, since a folder can be renamed on the server
-    # without its Graph id changing.
+    # Written on every sync rather than only when set: a Graph folder can be
+    # renamed without its id changing, and an IMAP server can drop a
+    # SPECIAL-USE attribute, which has to clear the role it stated.
     def set_folder_identity(self, folder_id: int, role: str, label: str) -> None:
         self._conn.execute(
             "UPDATE folders SET role = ?, label = ? WHERE id = ?",
@@ -453,7 +485,10 @@ class Database:
         return self._conversations_from_rows(rows, is_multi_folder=len(folder_ids) > 1)
 
     def search_conversations(
-        self, folder_ids: Sequence[int], query: str
+        self,
+        folder_ids: Sequence[int],
+        query: str,
+        server_hits: Sequence[int] = (),
     ) -> list[Conversation]:
         """Full-text search the folders; return each matching conversation whole.
 
@@ -468,7 +503,10 @@ class Database:
         if not match:
             return self.conversations_in_folders(folder_ids)
 
+        # server_hits are emails the server matched in text local search never
+        # indexed (the body), so they join the result whatever FTS says.
         places = ",".join("?" * len(folder_ids))
+        hit_places = ",".join("?" * len(server_hits)) or "NULL"
         rows = self._conn.execute(
             f"""
             SELECT {_EMAIL_COLUMNS} FROM emails
@@ -477,9 +515,12 @@ class Database:
                 FROM emails_fts f
                 JOIN emails e ON e.id = f.rowid
                 WHERE e.folder_id IN ({places}) AND emails_fts MATCH ?
+                UNION
+                SELECT COALESCE(conversation_id, id) FROM emails
+                WHERE id IN ({hit_places})
             )
             """,
-            (*folder_ids, *folder_ids, match),
+            (*folder_ids, *folder_ids, match, *server_hits),
         ).fetchall()
         return self._conversations_from_rows(rows, is_multi_folder=len(folder_ids) > 1)
 
@@ -499,6 +540,18 @@ class Database:
         thread_key = _sent_key if is_multi_folder else _arrival_key
         conversations.sort(key=lambda c: thread_key(c.latest), reverse=True)
         return conversations
+
+    def email_ids_for_server_ids(
+        self, folder_id: int, server_ids: Sequence[str]
+    ) -> list[int]:
+        if not server_ids:
+            return []
+        places = ",".join("?" * len(server_ids))
+        rows = self._conn.execute(
+            f"SELECT id FROM emails WHERE folder_id = ? AND server_id IN ({places})",
+            (folder_id, *server_ids),
+        ).fetchall()
+        return [row["id"] for row in rows]
 
     def unread_count_in_folder(self, folder_id: int) -> int:
         row = self._conn.execute(
@@ -593,13 +646,14 @@ class Database:
         sender_address: str = "",
         recipient: str = "",
         recipient_address: str = "",
+        message_id: str = "",
     ) -> Email:
         cursor = self._conn.execute(
             """
             INSERT INTO emails
                 (folder_id, server_id, sender, subject, preview, date, unread,
-                 sender_address, recipient, recipient_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 sender_address, recipient, recipient_address, message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 folder_id,
@@ -612,6 +666,7 @@ class Database:
                 sender_address,
                 recipient,
                 recipient_address,
+                message_id,
             ),
         )
         self._conn.commit()
@@ -634,6 +689,8 @@ class Database:
             "SELECT message_id FROM emails WHERE folder_id = ? AND server_id = ?",
             (folder_id, header.uid),
         ).fetchone()
+        if row is None and self._adopt_local_copy(folder_id, header):
+            return False
         is_new = row is None
         if row is not None and (row["message_id"] or "") != (header.message_id or ""):
             # Another message at the same UID (a mailbox that reset its UIDs).
@@ -654,7 +711,9 @@ class Database:
             ON CONFLICT (folder_id, server_id) DO UPDATE SET
                 unread = excluded.unread, starred = excluded.starred,
                 recipient = excluded.recipient,
-                recipient_address = excluded.recipient_address
+                recipient_address = excluded.recipient_address,
+                preview = CASE WHEN excluded.preview != ''
+                    THEN excluded.preview ELSE emails.preview END
             """,
             (
                 folder_id,
@@ -675,6 +734,58 @@ class Database:
         )
         self._conn.commit()
         return is_new
+
+    def _adopt_local_copy(self, folder_id: int, header: MessageHeader) -> bool:
+        """Give a locally saved copy the server id of the message it stands for.
+
+        Sending saves a copy to Sent before the server has one, and a sync then
+        brings the server's own copy. Inserting that as a new row left the local
+        one beside it for good -- prune only drops rows with a server id. Taking
+        the local row over instead also keeps the body it already has cached.
+        Returns False when there is no such copy, or the header has no
+        Message-ID to recognise it by.
+        """
+        if not header.message_id:
+            return False
+        local = self._conn.execute(
+            """
+            SELECT id FROM emails
+            WHERE folder_id = ? AND server_id IS NULL AND message_id = ?
+            ORDER BY id LIMIT 1
+            """,
+            (folder_id, header.message_id),
+        ).fetchone()
+        if local is None:
+            return False
+        self._conn.execute(
+            """
+            UPDATE emails SET server_id = ?, unread = ?, starred = ?,
+                in_reply_to = ?, reference_ids = ?
+            WHERE id = ?
+            """,
+            (
+                header.uid,
+                int(header.is_unread),
+                int(header.is_starred),
+                header.in_reply_to,
+                header.references,
+                local["id"],
+            ),
+        )
+        self._conn.commit()
+        return True
+
+    def save_bcc(self, email_id: int, addresses: list[str]) -> None:
+        self._conn.execute(
+            "UPDATE emails SET bcc = ? WHERE id = ?", ("\n".join(addresses), email_id)
+        )
+        self._conn.commit()
+
+    def bcc_for(self, email_id: int) -> list[str]:
+        row = self._conn.execute(
+            "SELECT bcc FROM emails WHERE id = ?", (email_id,)
+        ).fetchone()
+        return row["bcc"].split("\n") if row and row["bcc"] else []
 
     def delete_email(self, email_id: int) -> None:
         self._conn.execute("DELETE FROM emails WHERE id = ?", (email_id,))
@@ -699,6 +810,53 @@ class Database:
             references=row["reference_ids"] or "",
             conversation_id=row["conversation_id"],
         )
+
+    # --- actions waiting for the network --------------------------------------
+
+    def queue_action(self, action: PendingAction) -> None:
+        """Store an action to replay later; its id is assigned here."""
+        self._conn.execute(
+            """
+            INSERT INTO pending_actions
+                (account_id, kind, folder_name, uids, flag, should_add, destination)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                action.account_id,
+                action.kind,
+                action.folder_name,
+                "\n".join(action.uids),
+                action.flag,
+                int(action.should_add),
+                action.destination,
+            ),
+        )
+        self._conn.commit()
+
+    def pending_actions(self, account_id: int) -> list[PendingAction]:
+        rows = self._conn.execute(
+            "SELECT * FROM pending_actions WHERE account_id = ? ORDER BY id",
+            (account_id,),
+        ).fetchall()
+        return [
+            PendingAction(
+                id=row["id"],
+                account_id=row["account_id"],
+                kind=row["kind"],
+                folder_name=row["folder_name"],
+                uids=tuple(row["uids"].split("\n")) if row["uids"] else (),
+                flag=row["flag"],
+                should_add=bool(row["should_add"]),
+                destination=row["destination"],
+            )
+            for row in rows
+        ]
+
+    def delete_pending_actions(self, action_ids: Sequence[int]) -> None:
+        self._conn.executemany(
+            "DELETE FROM pending_actions WHERE id = ?", [(i,) for i in action_ids]
+        )
+        self._conn.commit()
 
     # --- contacts -----------------------------------------------------------
 

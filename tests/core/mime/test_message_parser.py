@@ -218,3 +218,25 @@ def test_unsubscribe_ignores_a_scheme_we_would_never_open():
 
 def test_a_message_from_no_mailing_list_has_no_unsubscribe():
     assert parse_message(PLAIN).unsubscribe is None
+
+
+def test_an_invitation_part_is_parsed_out_of_the_message():
+    raw = (
+        b"From: a@x\r\nSubject: Invite\r\nMIME-Version: 1.0\r\n"
+        b'Content-Type: multipart/alternative; boundary="b"\r\n\r\n'
+        b"--b\r\nContent-Type: text/plain\r\n\r\nYou're invited\r\n"
+        b'--b\r\nContent-Type: text/calendar; charset="utf-8"; method=REQUEST\r\n'
+        b"Content-Transfer-Encoding: 7bit\r\n\r\n"
+        b"BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:42\r\nSUMMARY:Lunch\r\n"
+        b"END:VEVENT\r\nEND:VCALENDAR\r\n--b--\r\n"
+    )
+
+    parsed = parse_message(raw)
+
+    assert parsed.invitation is not None
+    assert (parsed.invitation.method, parsed.invitation.summary) == ("REQUEST", "Lunch")
+    assert parsed.attachments == []
+
+
+def test_ordinary_mail_has_no_invitation():
+    assert parse_message(b"From: a@x\r\n\r\nhello").invitation is None

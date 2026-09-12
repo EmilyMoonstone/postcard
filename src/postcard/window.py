@@ -23,15 +23,19 @@ from .avatar_loader import AvatarLoader
 from .composer_window import PostcardComposerWindow, composer_for_mailto
 from .conversation_row import ConversationRow
 from .core import compose, secrets
+from .core.mime.invitation import Invitation
+from .core.mime.invitation import build_reply as build_invitation_reply
 from .core.mime.message_parser import ParsedMessage, Unsubscribe
 from .core.models.account import Account
 from .core.models.attachment import Attachment
 from .core.models.conversation import Conversation
 from .core.models.email import Email
 from .core.models.folder import Folder
+from .core.models.pending_action import ACTION_FLAG, ACTION_MOVE, PendingAction
 from .core.net import errors, imap_session
 from .core.store.database import Database
 from .folder_row import FolderRow
+from .mail_watch import MailWatcher
 from .message_view import LoadCallback, MessageView
 from .online_accounts_dialog import PostcardOnlineAccountsDialog
 from .window_types import (
@@ -178,6 +182,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._current_folder: Folder | None = None
         self._active_view: MessageView | None = None
         self._search_timeout: int = 0
+        # Emails the server found for the query on screen, which local search
+        # can't match when the words are only in the body. Bumping the
+        # generation drops results still in flight for an older query.
+        self._server_hits: list[int] = []
+        self._search_generation: int = 0
+        self._searching_folder_ids: set[int] = set()
         self._rendered_id: int | None = None
         self._suppress_folder_refresh: bool = False
         self._selection_update_in_progress: bool = False
@@ -218,7 +228,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # Same, for the Outbox: queued mail is only deleted once SMTP confirms
         # it, so a second drain over the same rows would send them twice.
         self._draining_account_ids: set[int] = set()
+        # Same, for actions queued while offline: replaying one twice would
+        # toggle a flag back or move a message on from where it landed.
+        self._replaying_account_ids: set[int] = set()
         self._sync_timer_id = 0
+        # Push for new mail between ticks. Started by _watch_accounts once
+        # there are accounts and the network, and only while syncing is on.
+        self._watcher = MailWatcher(self._on_mail_arrived)
         self._interval_handler = self._settings.connect(
             f"changed::{SETTING_SYNC_INTERVAL}", lambda *_: self._reschedule_sync()
         )
@@ -434,6 +450,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             # Keep the app alive so the sync timer keeps running.
             return True
 
+        self._watcher.stop_all()
         self._network.disconnect(self._network_handler)
         self._settings.disconnect(self._interval_handler)
         self._settings.disconnect(self._avatar_handler)
@@ -493,11 +510,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._current_folder = None
             self.main_stack.set_visible_child_name(PAGE_NO_ACCOUNT)
             self._push_tray_unread([])
+            self._watcher.stop_all()
             return
         if self._account is None:
             self._load_mail_view()
             return
         self._reload_folders()
+        self._watch_accounts()
 
     def _on_add_account_clicked(self, *_args: object) -> None:
         dialog = PostcardAccountDialog(self._db)
@@ -518,6 +537,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._reload_folders()
         # Highest id sorts last, so this is the one just added.
         self._start_sync(self._db.accounts()[-1], in_background=True)
+        self._watch_accounts()
 
     def _signature_text(self) -> str:
         if not self._settings.get_boolean("signature-enabled"):
@@ -828,6 +848,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 flag=flag,
                 should_add=not value if is_flag_inverted else value,
             )
+            if not self._is_online:
+                self._queue_flag(account, change)
+                continue
             threading.Thread(
                 target=self._flag_worker,
                 args=(account, change, revert),
@@ -864,6 +887,17 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 change.should_add,
             )
         except Exception as error:
+            if errors.is_connectivity(error):
+                logger.warning(
+                    "could not reach %s to set %s on %d message(s) in %s; queued",
+                    account.imap_host,
+                    change.flag,
+                    len(change.uids),
+                    change.folder_name,
+                    exc_info=True,
+                )
+                GLib.idle_add(self._on_flag_unreachable, account, change)
+                return
             logger.exception(
                 "could not set %s on %d message(s) in %s (account %s)",
                 change.flag,
@@ -872,6 +906,47 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 account.email,
             )
             GLib.idle_add(self._on_action_failed, revert, account.imap_host, error)
+
+    def _on_flag_unreachable(self, account: Account, change: FlagChange) -> bool:
+        if not self._is_stale(account):
+            self._queue_flag(account, change)
+        return False
+
+    # The local change stays: queued, it reaches the server on reconnect
+    # instead of being undone for a connection the user can't fix from here.
+    def _queue_flag(self, account: Account, change: FlagChange) -> None:
+        self._db.queue_action(
+            PendingAction(
+                id=0,
+                account_id=account.id,
+                kind=ACTION_FLAG,
+                folder_name=change.folder_name,
+                uids=change.uids,
+                flag=change.flag,
+                should_add=change.should_add,
+            )
+        )
+        self._toast_queued()
+
+    def _queue_move(self, pending: PendingMove) -> None:
+        self._db.queue_action(
+            PendingAction(
+                id=0,
+                account_id=pending.account.id,
+                kind=ACTION_MOVE,
+                folder_name=pending.source.name,
+                uids=tuple(pending.uids),
+                destination=pending.dest.name,
+            )
+        )
+        # The rows stay where the move put them, without a destination UID;
+        # the destination's next sync matches them by Message-ID. Until the
+        # source's next sync, keep its copies from coming back.
+        self._await_move_tombstones(pending, len(pending.uids))
+        self._toast_queued()
+
+    def _toast_queued(self) -> None:
+        self._toast(_("You're offline. This will reach the server when you reconnect."))
 
     def _on_flag_sign_in_failed(self, revert: Callable[[], None]) -> bool:
         # The row was already updated optimistically, so leaving it would show a
@@ -1229,6 +1304,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 self._move_tombstones.pop((tombstone_folder_id, uid), None)
 
     def _run_move_worker(self, pending: PendingMove) -> None:
+        if not self._is_online:
+            self._queue_move(pending)
+            return
         thread = threading.Thread(
             target=self._move_worker,
             args=(pending.account, pending),
@@ -1254,6 +1332,17 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             )
             GLib.idle_add(self._on_move_result, pending, result)
         except Exception as error:
+            if errors.is_connectivity(error):
+                logger.warning(
+                    "could not reach %s to move %d message(s) from %s to %s; queued",
+                    account.imap_host,
+                    len(pending.uids),
+                    pending.source.name,
+                    pending.dest.name,
+                    exc_info=True,
+                )
+                GLib.idle_add(self._on_move_unreachable, pending)
+                return
             logger.exception(
                 "could not move %d message(s) from %s to %s (account %s)",
                 len(pending.uids),
@@ -1296,6 +1385,11 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 result.error,
             )
             self._toast(_("Move failed: {msg}").format(msg=result.error))
+        return False
+
+    def _on_move_unreachable(self, pending: PendingMove) -> bool:
+        if not self._is_stale(pending.account):
+            self._queue_move(pending)
         return False
 
     def _on_move_sign_in_failed(self, pending: PendingMove) -> bool:
@@ -1522,6 +1616,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._update_archive_button()
         if self._suppress_folder_refresh:
             return
+        if self.search_entry.get_text().strip():
+            self._start_server_search()
         self._refresh_conversations()
         # Only sync on a real folder change — rebuilding the sidebar re-emits
         # selection-changed for the same folder, which would loop. A folder
@@ -1673,7 +1769,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         folder_ids = [folder.id for folder in self._view_folders()]
         query = self.search_entry.get_text().strip()
         matches = (
-            self._db.search_conversations(folder_ids, query)
+            self._db.search_conversations(folder_ids, query, self._server_hits)
             if query
             else self._db.conversations_in_folders(folder_ids)
         )
@@ -1716,7 +1812,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     def _show_list_or_placeholder(self) -> None:
         if self._conversation_store.get_n_items() > 0:
             page = PAGE_LIST
-        elif self._is_view_syncing():
+        elif self._is_view_syncing() or self._searching_folder_ids:
             page = PAGE_LOADING
         else:
             page = PAGE_EMPTY
@@ -1750,7 +1846,83 @@ class PostcardMainWindow(Adw.ApplicationWindow):
 
     def _on_search_timeout(self) -> bool:
         self._search_timeout = 0
+        self._start_server_search()
         self._refresh_conversations()
+        return False
+
+    def _start_server_search(self) -> None:
+        """Ask the server of every folder on screen for the typed query.
+
+        Local results show at once; these join them as they arrive.
+        """
+        self._search_generation += 1
+        self._server_hits = []
+        self._searching_folder_ids.clear()
+        query = self.search_entry.get_text().strip()
+        if not query or not self._is_online or self._account is None:
+            return
+        for folder in self._view_folders():
+            account = self._accounts.get(folder.account_id)
+            if account is None or folder.name == mail_sync.OUTBOX_FOLDER:
+                continue
+            self._searching_folder_ids.add(folder.id)
+            threading.Thread(
+                target=self._search_worker,
+                args=(account, folder.id, folder.name, query, self._search_generation),
+                daemon=True,
+            ).start()
+
+    # Runs on the worker thread: network only, no Gtk/database access.
+    def _search_worker(
+        self,
+        account: Account,
+        folder_id: int,
+        folder_name: str,
+        query: str,
+        generation: int,
+    ) -> None:
+        headers: list[mail_sync.MessageHeader] = []
+        credential = secrets.credential_for(account)
+        if credential is None:
+            logger.warning("could not sign in to %s to search", account.email)
+        else:
+            try:
+                headers = mail_sync.search_mailbox(
+                    account, credential, folder_name, query
+                )
+            except Exception:
+                # Local results are already on screen, so a failed server
+                # search only means fewer of them -- not worth a banner.
+                logger.warning(
+                    "server search in %s failed (account %s)",
+                    folder_name,
+                    account.email,
+                    exc_info=True,
+                )
+        GLib.idle_add(self._on_search_done, folder_id, generation, headers)
+
+    def _on_search_done(
+        self,
+        folder_id: int,
+        generation: int,
+        headers: list[mail_sync.MessageHeader],
+    ) -> bool:
+        if generation != self._search_generation:
+            return False
+        self._searching_folder_ids.discard(folder_id)
+        # The folder can have gone with its account while the search ran.
+        if folder_id in self._folders_by_id and headers:
+            for header in headers:
+                if (folder_id, header.uid) not in self._move_tombstones:
+                    self._db.save_incoming_email(folder_id, header)
+            self._db.reassign_conversations(folder_id)
+            self._server_hits.extend(
+                self._db.email_ids_for_server_ids(
+                    folder_id, [header.uid for header in headers]
+                )
+            )
+        selected = self._selected_conversation()
+        self._refresh_conversations(keep_id=selected.id if selected else None)
         return False
 
     # Closing the search bar clears the query so the full list comes back.
@@ -1943,6 +2115,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 on_open_attachment=self._open_attachment,
                 on_rendered=self._on_newest_rendered if is_newest else None,
                 on_unsubscribe=self._on_unsubscribe,
+                on_respond=self._respond_to_invitation,
+                own_address=account.email if account is not None else "",
                 is_expanded=is_newest,
                 should_load_remote_images=should_load_remote_images,
                 delivered_to=delivered_to,
@@ -2023,6 +2197,77 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             GLib.idle_add(self._deliver_body, callback, request.email_id, None, message)
             return
         GLib.idle_add(self._deliver_body, callback, request.email_id, raw, None)
+
+    def _respond_to_invitation(
+        self,
+        mail: Email,
+        invitation: Invitation,
+        response: str,
+        done: Callable[[bool], None],
+    ) -> None:
+        origin = self._origin(mail)
+        if origin is None or not invitation.organizer:
+            self._toast(_("This invitation can't be answered."))
+            done(False)
+            return
+        account, _folder = origin
+        reply = build_invitation_reply(
+            invitation,
+            account.email,
+            account.display_name.strip(),
+            response,
+            datetime.now().astimezone(),
+        ).as_bytes()
+        threading.Thread(
+            target=self._invitation_worker,
+            args=(account, mail.server_id or "", response, reply, done),
+            daemon=True,
+        ).start()
+
+    # Runs on the worker thread: network only, no Gtk/database access.
+    def _invitation_worker(
+        self,
+        account: Account,
+        message_uid: str,
+        response: str,
+        reply: bytes,
+        done: Callable[[bool], None],
+    ) -> None:
+        credential = secrets.credential_for(account)
+        if credential is None:
+            logger.warning("could not sign in to %s to answer", account.email)
+            GLib.idle_add(
+                self._on_invitation_answered,
+                done,
+                account,
+                RuntimeError(_("Could not sign in to this account.")),
+            )
+            return
+        try:
+            mail_sync.respond_to_invitation(
+                account, credential, message_uid, response, reply
+            )
+        except Exception as error:
+            logger.exception(
+                "could not answer an invitation %s (account %s)",
+                response,
+                account.email,
+            )
+            GLib.idle_add(self._on_invitation_answered, done, account, error)
+            return
+        GLib.idle_add(self._on_invitation_answered, done, account, None)
+
+    def _on_invitation_answered(
+        self,
+        done: Callable[[bool], None],
+        account: Account,
+        error: Exception | None,
+    ) -> bool:
+        done(error is None)
+        if error is not None:
+            _is_auth_failure, message = errors.classify(error, account.smtp_host)
+            self._toast(_("Couldn't answer the invitation: {msg}").format(msg=message))
+        return False
 
     # Back on the main thread: cache the body, then hand it to the MessageView.
     def _deliver_body(
@@ -2199,7 +2444,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             raw = self._db.get_raw_message(mail.id)
             if raw is None:
                 continue
-            jobs.append((mail.id, mail.subject, compose.extract_recipients(raw), raw))
+            recipients = compose.extract_recipients(raw, self._db.bcc_for(mail.id))
+            jobs.append((mail.id, mail.subject, recipients, raw))
         if not jobs:
             return
 
@@ -2272,6 +2518,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 preview=result.subject,
                 date=datetime.now().astimezone().isoformat(),
                 is_unread=False,
+                message_id=compose.message_id(result.raw),
             )
             self._db.save_raw_message(row.id, result.raw)
             self._db.delete_email(result.email_id)
@@ -2330,11 +2577,79 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         open_names = {folder.account_id: folder.name for folder in self._view_folders()}
         for account in self._accounts.values():
             self._drain_outbox(account)
+            # Queued actions go first, or the sync would pull the server's
+            # older flags over the ones the user set while offline.
+            if self._replay_queued(account, open_names.get(account.id)):
+                continue
             self._start_sync(
                 account,
                 in_background=in_background,
                 folder_name=open_names.get(account.id),
             )
+
+    def _replay_queued(self, account: Account, folder_name: str | None) -> bool:
+        """Start replaying this account's queued actions; True if it did.
+
+        The sync follows once the replay is done, from _on_replay_done.
+        """
+        if account.id in self._replaying_account_ids:
+            return True
+        actions = self._db.pending_actions(account.id)
+        if not actions or not self._is_online:
+            return False
+        self._replaying_account_ids.add(account.id)
+        threading.Thread(
+            target=self._replay_worker,
+            args=(account, actions, folder_name),
+            daemon=True,
+        ).start()
+        return True
+
+    # Runs on the worker thread: network only, no Gtk/database access.
+    def _replay_worker(
+        self,
+        account: Account,
+        actions: list[PendingAction],
+        folder_name: str | None,
+    ) -> None:
+        credential = secrets.credential_for(account)
+        if credential is None:
+            logger.warning(
+                "could not sign in to %s; %d queued action(s) wait",
+                account.email,
+                len(actions),
+            )
+            # Synced anyway: the sync is what shows the sign-in banner, and it
+            # can't overwrite anything while it can't sign in either.
+            GLib.idle_add(self._on_replay_done, account, [], True, folder_name)
+            return
+        finished, error = mail_sync.replay(account, credential, actions)
+        if error is not None:
+            logger.warning(
+                "lost %s again after %d of %d queued action(s)",
+                account.imap_host,
+                len(finished),
+                len(actions),
+                exc_info=error,
+            )
+        GLib.idle_add(
+            self._on_replay_done, account, finished, error is None, folder_name
+        )
+
+    def _on_replay_done(
+        self,
+        account: Account,
+        finished: list[int],
+        is_complete: bool,
+        folder_name: str | None,
+    ) -> bool:
+        self._replaying_account_ids.discard(account.id)
+        if self._is_stale(account):
+            return False
+        self._db.delete_pending_actions(finished)
+        if is_complete:
+            self._start_sync(account, in_background=True, folder_name=folder_name)
+        return False
 
     # Refresh on a timer using the configured interval (0 = manual only).
     def _reschedule_sync(self) -> None:
@@ -2346,6 +2661,25 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._sync_timer_id = GLib.timeout_add_seconds(
                 minutes * SECONDS_PER_MINUTE, self._on_sync_tick
             )
+        self._watch_accounts()
+
+    def _watch_accounts(self) -> None:
+        """Keep push running for exactly the accounts that should have it.
+
+        Manual-only sync (an interval of 0) means the user wants no background
+        traffic, and an IDLE connection is exactly that.
+        """
+        is_wanted = (
+            self._is_online and self._settings.get_int(SETTING_SYNC_INTERVAL) > 0
+        )
+        self._watcher.watch(list(self._accounts.values()) if is_wanted else [])
+
+    def _on_mail_arrived(self, account_id: int) -> bool:
+        account = self._accounts.get(account_id)
+        if account is not None and self._is_online:
+            # The inbox, like a tick: its sync also refreshes every badge.
+            self._start_sync(account, in_background=True)
+        return False
 
     def _on_sync_tick(self) -> bool:
         if self._accounts and self._is_online:
@@ -2490,8 +2824,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._db.set_folder_parent(
                 folder.id, parent.id if parent else None, mailbox.delimiter
             )
-            if mailbox.role or mailbox.label:
-                self._db.set_folder_identity(folder.id, mailbox.role, mailbox.label)
+            self._db.set_folder_identity(folder.id, mailbox.role, mailbox.label)
 
     # Notification ids carry the account: every account syncs on the same tick,
     # and a repeated id replaces the notification already on screen.
@@ -2618,11 +2951,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             # The pooled connections are on sockets that are already gone, but
             # nothing says so until a command times out on one.
             mail_sync.close_sessions()
+            self._watch_accounts()
             self._show_offline_banner()
             return
         self.connection_banner.set_revealed(False)
         if self._accounts:
             self._sync_all()
+        self._watch_accounts()
 
     def _notify_background(self) -> None:
         # Once per install, not once per close: the notice explains why the app
