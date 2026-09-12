@@ -2490,8 +2490,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._db.set_folder_parent(
                 folder.id, parent.id if parent else None, mailbox.delimiter
             )
-            if mailbox.role or mailbox.label:
-                self._db.set_folder_identity(folder.id, mailbox.role, mailbox.label)
+            self._db.set_folder_identity(folder.id, mailbox.role, mailbox.label)
 
     # Notification ids carry the account: every account syncs on the same tick,
     # and a repeated id replaces the notification already on screen.

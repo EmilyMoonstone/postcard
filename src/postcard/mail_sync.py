@@ -290,7 +290,7 @@ def _unread_counts(
     for mailbox in mailboxes:
         if mailbox.name == target or ATTR_NOSELECT in mailbox.flags:
             continue
-        if role_for_folder(mailbox.name) is FolderRole.OTHER:
+        if mailbox_role(mailbox) is FolderRole.OTHER:
             continue
         try:
             counts[mailbox.name] = session.unseen_count(mailbox.name)
@@ -539,8 +539,13 @@ def _append_to_sent(account: Account, credential: Credential, raw: bytes) -> Non
     with _pooled_session(account, credential) as session:
         if session.has_capability(GMAIL_CAPABILITY):
             return
-        sent = mailbox_with_role(
-            (mailbox.name for mailbox in session.list_folders()), FolderRole.SENT
+        sent = next(
+            (
+                mailbox.name
+                for mailbox in session.list_folders()
+                if mailbox_role(mailbox) is FolderRole.SENT
+            ),
+            None,
         )
         if sent is None:
             logger.warning(
@@ -564,6 +569,14 @@ def role_for_folder(name: str) -> FolderRole:
         if pattern.search(name):
             return role
     return FolderRole.OTHER
+
+
+def mailbox_role(mailbox: MailboxInfo) -> FolderRole:
+    """A listed mailbox's role: stated by the server, else inferred from its name."""
+    try:
+        return FolderRole(mailbox.role)
+    except ValueError:
+        return role_for_folder(mailbox.name)
 
 
 def folder_role(folder: Folder) -> FolderRole:
@@ -685,9 +698,7 @@ def creation_order(mailboxes: list[MailboxInfo]) -> list[MailboxInfo]:
 def icon_for_mailbox(mailbox: MailboxInfo) -> str:
     if ATTR_NOSELECT in mailbox.flags:
         return "folder-symbolic"
-    if mailbox.role:
-        return icon_for_role(FolderRole(mailbox.role))
-    return icon_for_folder(mailbox.name)
+    return icon_for_role(mailbox_role(mailbox))
 
 
 def display_name_for_folder(name: str, delimiter: str | None = None) -> str:

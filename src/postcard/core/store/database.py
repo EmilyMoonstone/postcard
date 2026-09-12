@@ -353,8 +353,9 @@ class Database:
         )
         self._conn.commit()
 
-    # Written on every sync, since a folder can be renamed on the server
-    # without its Graph id changing.
+    # Written on every sync rather than only when set: a Graph folder can be
+    # renamed without its id changing, and an IMAP server can drop a
+    # SPECIAL-USE attribute, which has to clear the role it stated.
     def set_folder_identity(self, folder_id: int, role: str, label: str) -> None:
         self._conn.execute(
             "UPDATE folders SET role = ?, label = ? WHERE id = ?",

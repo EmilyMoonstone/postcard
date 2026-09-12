@@ -4,7 +4,12 @@ import ssl
 import pytest
 
 from postcard.core.net.auth import MECHANISM_XOAUTH2, Credential
-from postcard.core.net.imap_session import FetchedHeader, ImapError, ImapSession
+from postcard.core.net.imap_session import (
+    FetchedHeader,
+    ImapError,
+    ImapSession,
+    special_use_role,
+)
 
 
 class FakeImap:
@@ -314,3 +319,36 @@ def test_connect_gives_starttls_a_verifying_context(monkeypatch):
 
     assert imap.calls[0][0] == "STARTTLS"
     _assert_verifies(imap.calls[0][1])
+
+
+# --- SPECIAL-USE -------------------------------------------------------------
+
+
+def test_list_folders_reads_the_role_a_special_use_attribute_states(monkeypatch):
+    imap = FakeImap()
+    imap.list = lambda: (
+        "OK",
+        [
+            b'(\\HasNoChildren) "/" "INBOX"',
+            b'(\\HasNoChildren \\Sent) "/" "Gesendete Objekte"',
+            b'(\\HasNoChildren \\Trash) "/" "Papierkorb"',
+            b'(\\HasChildren \\Noselect) "/" "[Gmail]"',
+            b'(\\All \\HasNoChildren) "/" "[Gmail]/Alle Nachrichten"',
+        ],
+    )
+
+    folders = connect(monkeypatch, imap).list_folders()
+
+    assert [(folder.name, folder.role) for folder in folders] == [
+        ("INBOX", ""),
+        ("Gesendete Objekte", "sent"),
+        ("Papierkorb", "trash"),
+        ("[Gmail]", ""),
+        ("[Gmail]/Alle Nachrichten", "archive"),
+    ]
+
+
+def test_special_use_attributes_match_regardless_of_case():
+    assert special_use_role("\\HasNoChildren \\JUNK") == "junk"
+    assert special_use_role("\\Marked \\Drafts") == "drafts"
+    assert special_use_role("\\HasNoChildren") == ""

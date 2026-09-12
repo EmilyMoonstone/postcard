@@ -6,6 +6,8 @@ import re
 from email import policy
 from typing import NamedTuple
 
+from ..models.folder import FolderRole
+
 # Re-exported (the "as" form): MailboxInfo is what list_folders returns, and
 # lives in core.models only so the Graph backend can build one too.
 from ..models.mailbox import MailboxInfo as MailboxInfo
@@ -26,6 +28,30 @@ FLAG_FLAGGED = "\\Flagged"
 # A LIST attribute, not a message flag: the mailbox is a container that cannot
 # hold mail (Gmail's "[Gmail]"), so it is shown but never selected.
 ATTR_NOSELECT = "\\Noselect"
+
+# RFC 6154 SPECIAL-USE attributes, which a server puts on LIST replies to say
+# what a mailbox is for whatever it is called -- the reliable answer for a
+# "Gesendete Objekte". \All is Gmail's All Mail, which the app has always
+# treated as the archive.
+SPECIAL_USE_ROLES: dict[str, FolderRole] = {
+    "\\sent": FolderRole.SENT,
+    "\\drafts": FolderRole.DRAFTS,
+    "\\trash": FolderRole.TRASH,
+    "\\junk": FolderRole.JUNK,
+    "\\archive": FolderRole.ARCHIVE,
+    "\\all": FolderRole.ARCHIVE,
+    "\\flagged": FolderRole.STARRED,
+}
+
+
+def special_use_role(flags: str) -> str:
+    """The FolderRole a LIST reply's attributes state, or "" when none does."""
+    for attribute in flags.split():
+        role = SPECIAL_USE_ROLES.get(attribute.lower())
+        if role is not None:
+            return role
+    return ""
+
 
 # Gmail files its own copy of everything sent through it. This capability is how
 # it identifies itself, so we don't append a second copy on top.
@@ -177,7 +203,11 @@ class ImapSession:
             delim_raw = match.group(2)
             name = _unquote(match.group(3).strip())
             delimiter = "" if delim_raw == "NIL" else _unquote(delim_raw)
-            result.append(MailboxInfo(name, delimiter, flags_part))
+            result.append(
+                MailboxInfo(
+                    name, delimiter, flags_part, role=special_use_role(flags_part)
+                )
+            )
         return result
 
     def select(self, mailbox: str, is_readonly: bool = True) -> int:

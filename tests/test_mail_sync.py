@@ -37,6 +37,7 @@ from postcard.mail_sync import (
     inbox_name,
     is_outgoing,
     is_outgoing_folder,
+    mailbox_role,
     mailbox_with_role,
     move_messages,
     parent_mailbox_name,
@@ -1061,3 +1062,29 @@ def test_graph_operations_go_to_graph(graph, monkeypatch):
         ("move", ["m1", "m2"], "bin"),
         ("send", b"raw", ["x@y"]),
     ]
+
+
+def test_a_mailbox_role_prefers_the_special_use_attribute():
+    assert mailbox_role(
+        MailboxInfo("Gesendete Objekte", "/", "\\Sent", role="sent")
+    ) is (FolderRole.SENT)
+    assert mailbox_role(MailboxInfo("Sent Items", "/", "")) is FolderRole.SENT
+    assert mailbox_role(MailboxInfo("Gesendete Objekte", "/", "")) is FolderRole.OTHER
+
+
+def test_unread_counts_cover_folders_only_a_special_use_attribute_names(monkeypatch):
+    class CountingImapSession(FakeImapSession):
+        mailboxes = [
+            MailboxInfo("INBOX", "/", ""),
+            MailboxInfo("Papierkorb", "/", "\\Trash", role="trash"),
+            MailboxInfo("Projekte", "/", ""),
+        ]
+
+        def unseen_count(self, mailbox):
+            return 4
+
+    monkeypatch.setattr(mail_sync, "ImapSession", CountingImapSession)
+
+    result = fetch_mailbox(account(), CREDENTIAL)
+
+    assert result.unread_counts == {"Papierkorb": 4}
