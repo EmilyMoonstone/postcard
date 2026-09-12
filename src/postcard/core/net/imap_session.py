@@ -406,6 +406,16 @@ class ImapSession:
         imap.literal = query.encode("utf-8")  # pyright: ignore[reportAttributeAccessIssue]
         return self._uid_search("CHARSET", "UTF-8", "TEXT")
 
+    def search_gmail(self, uids: list[str], gmail_query: str) -> set[str]:
+        """Which of these UIDs match a Gmail search, such as "category:updates".
+
+        X-GM-RAW is Gmail's own search language, and the only way its inbox
+        categories reach an IMAP client.
+        """
+        if not uids:
+            return set()
+        return self._uid_search("UID", ",".join(uids), "X-GM-RAW", f'"{gmail_query}"')
+
     def _uid_search(self, *criteria: str) -> set[str]:
         try:
             status, payload = self._require_imap().uid("SEARCH", *criteria)

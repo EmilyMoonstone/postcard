@@ -553,3 +553,12 @@ def test_a_calendar_part_in_the_body_slice_marks_an_invitation(monkeypatch):
     [header] = session.fetch_recent_headers(exists=1, limit=50)
 
     assert header.is_invitation is True
+
+
+def test_a_gmail_search_is_limited_to_the_uids_given(monkeypatch):
+    imap = FakeImap(search_reply=("OK", [b"2"]))
+    session = connect(monkeypatch, imap)
+
+    assert session.search_gmail(["1", "2"], "category:updates") == {"2"}
+    assert imap.calls == [("SEARCH", "UID", "1,2", "X-GM-RAW", '"category:updates"')]
+    assert session.search_gmail([], "category:updates") == set()
