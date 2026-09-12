@@ -7,6 +7,7 @@ from postcard.core.models.account import Account
 from postcard.core.models.conversation import Conversation
 from postcard.core.models.email import Email
 from postcard.core.models.folder import Folder
+from postcard.core.models.pending_action import PendingAction
 from postcard.core.net.auth import Credential
 from postcard.core.net.graph_folders import GraphFolder
 from postcard.core.net.graph_messages import DeltaState, MoveOutcome
@@ -1161,3 +1162,77 @@ def test_a_graph_search_goes_to_graph(graph):
     mail_sync.search_mailbox(graph_account(), GRAPH_TOKEN, "in", "lunch")
 
     assert graph.calls == [("search", "in", "lunch", mail_sync.SEARCH_LIMIT)]
+
+
+# --- replaying actions queued while offline ------------------------------------------
+
+
+def queued(action_id, kind="flag", **fields) -> PendingAction:
+    return PendingAction(action_id, 1, kind, "INBOX", ("4",), **fields)
+
+
+def test_replay_runs_each_action_and_reports_them_finished(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        mail_sync, "set_flag", lambda *args: calls.append(("flag", args[2:]))
+    )
+    monkeypatch.setattr(
+        mail_sync,
+        "move_messages",
+        lambda *args: calls.append(("move", args[2:])) or mail_sync.MoveResult(["7"]),
+    )
+
+    finished, error = mail_sync.replay(
+        account(),
+        CREDENTIAL,
+        [
+            queued(1, flag=FLAG_SEEN, should_add=True),
+            queued(2, "move", destination="Archive"),
+        ],
+    )
+
+    assert (finished, error) == ([1, 2], None)
+    assert calls == [
+        ("flag", ("INBOX", ("4",), FLAG_SEEN, True)),
+        ("move", ("INBOX", ["4"], "Archive")),
+    ]
+
+
+def test_an_action_the_server_refuses_is_dropped_and_the_rest_carry_on(monkeypatch):
+    def refuse(*args):
+        raise ImapError("no such message")
+
+    monkeypatch.setattr(mail_sync, "set_flag", refuse)
+    monkeypatch.setattr(
+        mail_sync, "move_messages", lambda *a: mail_sync.MoveResult(["7"])
+    )
+
+    finished, error = mail_sync.replay(
+        account(), CREDENTIAL, [queued(1), queued(2, "move", destination="Archive")]
+    )
+
+    assert (finished, error) == ([1, 2], None)
+
+
+def test_losing_the_network_again_stops_the_replay_and_keeps_the_rest(monkeypatch):
+    def unreachable(*args):
+        raise TimeoutError
+
+    monkeypatch.setattr(mail_sync, "set_flag", unreachable)
+
+    finished, error = mail_sync.replay(account(), CREDENTIAL, [queued(1), queued(2)])
+
+    assert finished == []
+    assert isinstance(error, TimeoutError)
+
+
+def test_a_move_that_fails_part_way_counts_as_refused(monkeypatch):
+    monkeypatch.setattr(
+        mail_sync, "move_messages", lambda *a: mail_sync.MoveResult([], 0, "gone")
+    )
+
+    finished, error = mail_sync.replay(
+        account(), CREDENTIAL, [queued(3, "move", destination="Archive")]
+    )
+
+    assert (finished, error) == ([3], None)

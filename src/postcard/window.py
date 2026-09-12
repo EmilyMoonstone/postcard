@@ -29,6 +29,7 @@ from .core.models.attachment import Attachment
 from .core.models.conversation import Conversation
 from .core.models.email import Email
 from .core.models.folder import Folder
+from .core.models.pending_action import ACTION_FLAG, ACTION_MOVE, PendingAction
 from .core.net import errors, imap_session
 from .core.store.database import Database
 from .folder_row import FolderRow
@@ -224,6 +225,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # Same, for the Outbox: queued mail is only deleted once SMTP confirms
         # it, so a second drain over the same rows would send them twice.
         self._draining_account_ids: set[int] = set()
+        # Same, for actions queued while offline: replaying one twice would
+        # toggle a flag back or move a message on from where it landed.
+        self._replaying_account_ids: set[int] = set()
         self._sync_timer_id = 0
         self._interval_handler = self._settings.connect(
             f"changed::{SETTING_SYNC_INTERVAL}", lambda *_: self._reschedule_sync()
@@ -834,6 +838,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 flag=flag,
                 should_add=not value if is_flag_inverted else value,
             )
+            if not self._is_online:
+                self._queue_flag(account, change)
+                continue
             threading.Thread(
                 target=self._flag_worker,
                 args=(account, change, revert),
@@ -870,6 +877,17 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 change.should_add,
             )
         except Exception as error:
+            if errors.is_connectivity(error):
+                logger.warning(
+                    "could not reach %s to set %s on %d message(s) in %s; queued",
+                    account.imap_host,
+                    change.flag,
+                    len(change.uids),
+                    change.folder_name,
+                    exc_info=True,
+                )
+                GLib.idle_add(self._on_flag_unreachable, account, change)
+                return
             logger.exception(
                 "could not set %s on %d message(s) in %s (account %s)",
                 change.flag,
@@ -878,6 +896,47 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 account.email,
             )
             GLib.idle_add(self._on_action_failed, revert, account.imap_host, error)
+
+    def _on_flag_unreachable(self, account: Account, change: FlagChange) -> bool:
+        if not self._is_stale(account):
+            self._queue_flag(account, change)
+        return False
+
+    # The local change stays: queued, it reaches the server on reconnect
+    # instead of being undone for a connection the user can't fix from here.
+    def _queue_flag(self, account: Account, change: FlagChange) -> None:
+        self._db.queue_action(
+            PendingAction(
+                id=0,
+                account_id=account.id,
+                kind=ACTION_FLAG,
+                folder_name=change.folder_name,
+                uids=change.uids,
+                flag=change.flag,
+                should_add=change.should_add,
+            )
+        )
+        self._toast_queued()
+
+    def _queue_move(self, pending: PendingMove) -> None:
+        self._db.queue_action(
+            PendingAction(
+                id=0,
+                account_id=pending.account.id,
+                kind=ACTION_MOVE,
+                folder_name=pending.source.name,
+                uids=tuple(pending.uids),
+                destination=pending.dest.name,
+            )
+        )
+        # The rows stay where the move put them, without a destination UID;
+        # the destination's next sync matches them by Message-ID. Until the
+        # source's next sync, keep its copies from coming back.
+        self._await_move_tombstones(pending, len(pending.uids))
+        self._toast_queued()
+
+    def _toast_queued(self) -> None:
+        self._toast(_("You're offline. This will reach the server when you reconnect."))
 
     def _on_flag_sign_in_failed(self, revert: Callable[[], None]) -> bool:
         # The row was already updated optimistically, so leaving it would show a
@@ -1235,6 +1294,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 self._move_tombstones.pop((tombstone_folder_id, uid), None)
 
     def _run_move_worker(self, pending: PendingMove) -> None:
+        if not self._is_online:
+            self._queue_move(pending)
+            return
         thread = threading.Thread(
             target=self._move_worker,
             args=(pending.account, pending),
@@ -1260,6 +1322,17 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             )
             GLib.idle_add(self._on_move_result, pending, result)
         except Exception as error:
+            if errors.is_connectivity(error):
+                logger.warning(
+                    "could not reach %s to move %d message(s) from %s to %s; queued",
+                    account.imap_host,
+                    len(pending.uids),
+                    pending.source.name,
+                    pending.dest.name,
+                    exc_info=True,
+                )
+                GLib.idle_add(self._on_move_unreachable, pending)
+                return
             logger.exception(
                 "could not move %d message(s) from %s to %s (account %s)",
                 len(pending.uids),
@@ -1302,6 +1375,11 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 result.error,
             )
             self._toast(_("Move failed: {msg}").format(msg=result.error))
+        return False
+
+    def _on_move_unreachable(self, pending: PendingMove) -> bool:
+        if not self._is_stale(pending.account):
+            self._queue_move(pending)
         return False
 
     def _on_move_sign_in_failed(self, pending: PendingMove) -> bool:
@@ -2416,11 +2494,79 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         open_names = {folder.account_id: folder.name for folder in self._view_folders()}
         for account in self._accounts.values():
             self._drain_outbox(account)
+            # Queued actions go first, or the sync would pull the server's
+            # older flags over the ones the user set while offline.
+            if self._replay_queued(account, open_names.get(account.id)):
+                continue
             self._start_sync(
                 account,
                 in_background=in_background,
                 folder_name=open_names.get(account.id),
             )
+
+    def _replay_queued(self, account: Account, folder_name: str | None) -> bool:
+        """Start replaying this account's queued actions; True if it did.
+
+        The sync follows once the replay is done, from _on_replay_done.
+        """
+        if account.id in self._replaying_account_ids:
+            return True
+        actions = self._db.pending_actions(account.id)
+        if not actions or not self._is_online:
+            return False
+        self._replaying_account_ids.add(account.id)
+        threading.Thread(
+            target=self._replay_worker,
+            args=(account, actions, folder_name),
+            daemon=True,
+        ).start()
+        return True
+
+    # Runs on the worker thread: network only, no Gtk/database access.
+    def _replay_worker(
+        self,
+        account: Account,
+        actions: list[PendingAction],
+        folder_name: str | None,
+    ) -> None:
+        credential = secrets.credential_for(account)
+        if credential is None:
+            logger.warning(
+                "could not sign in to %s; %d queued action(s) wait",
+                account.email,
+                len(actions),
+            )
+            # Synced anyway: the sync is what shows the sign-in banner, and it
+            # can't overwrite anything while it can't sign in either.
+            GLib.idle_add(self._on_replay_done, account, [], True, folder_name)
+            return
+        finished, error = mail_sync.replay(account, credential, actions)
+        if error is not None:
+            logger.warning(
+                "lost %s again after %d of %d queued action(s)",
+                account.imap_host,
+                len(finished),
+                len(actions),
+                exc_info=error,
+            )
+        GLib.idle_add(
+            self._on_replay_done, account, finished, error is None, folder_name
+        )
+
+    def _on_replay_done(
+        self,
+        account: Account,
+        finished: list[int],
+        is_complete: bool,
+        folder_name: str | None,
+    ) -> bool:
+        self._replaying_account_ids.discard(account.id)
+        if self._is_stale(account):
+            return False
+        self._db.delete_pending_actions(finished)
+        if is_complete:
+            self._start_sync(account, in_background=True, folder_name=folder_name)
+        return False
 
     # Refresh on a timer using the configured interval (0 = manual only).
     def _reschedule_sync(self) -> None:

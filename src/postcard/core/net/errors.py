@@ -1,5 +1,7 @@
 import html
+import imaplib
 import re
+import smtplib
 import socket
 import ssl
 from gettext import gettext as _
@@ -17,6 +19,20 @@ _AUTH_HINTS = (
     "login failed",
     "5.7.8",
 )
+
+
+def is_connectivity(exc: BaseException) -> bool:
+    """Whether an operation failed for want of a network, not because the
+    server refused it -- the one kind worth queueing to try again later.
+
+    A TLS failure is an OSError too, but a real one: retrying on reconnect
+    would meet the same certificate.
+    """
+    if isinstance(exc, ssl.SSLError):
+        return False
+    return isinstance(
+        exc, (OSError, imaplib.IMAP4.abort, smtplib.SMTPServerDisconnected)
+    )
 
 
 # Turn a raw exception into an (is it the password?, friendly message) pair.

@@ -4,6 +4,11 @@ import pytest
 
 from postcard.core.models.email import Email
 from postcard.core.models.message_header import MessageHeader
+from postcard.core.models.pending_action import (
+    ACTION_FLAG,
+    ACTION_MOVE,
+    PendingAction,
+)
 from postcard.core.store.database import (
     Database,
     _arrival_key,
@@ -754,3 +759,37 @@ def test_email_ids_for_server_ids_ignores_other_folders(db, folder):
 
     assert db.email_ids_for_server_ids(folder.id, ["2"]) == []
     assert db.email_ids_for_server_ids(folder.id, []) == []
+
+
+# --- actions queued while offline -------------------------------------------------
+
+
+def test_queued_actions_come_back_in_order_and_go_once_done(db, folder):
+    flag = PendingAction(
+        0, folder.account_id, ACTION_FLAG, "INBOX", ("4", "9"), "\\Seen", True
+    )
+    move = PendingAction(
+        0, folder.account_id, ACTION_MOVE, "INBOX", ("4",), destination="Archive"
+    )
+    db.queue_action(flag)
+    db.queue_action(move)
+
+    first, second = db.pending_actions(folder.account_id)
+    assert (first.kind, first.uids, first.flag, first.should_add) == (
+        "flag",
+        ("4", "9"),
+        "\\Seen",
+        True,
+    )
+    assert (second.kind, second.destination) == ("move", "Archive")
+
+    db.delete_pending_actions([first.id])
+    assert [a.id for a in db.pending_actions(folder.account_id)] == [second.id]
+
+
+def test_removing_an_account_drops_its_queued_actions(db, folder):
+    db.queue_action(PendingAction(0, folder.account_id, ACTION_FLAG, "INBOX", ("4",)))
+
+    db.delete_account(folder.account_id)
+
+    assert db.pending_actions(folder.account_id) == []

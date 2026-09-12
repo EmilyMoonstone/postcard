@@ -19,7 +19,8 @@ from .core.models.folder import Folder, FolderRole
 # Re-exported: callers reach MessageHeader through mail_sync, which is where it
 # is built. It lives in core.models so core.store can accept one directly.
 from .core.models.message_header import MessageHeader
-from .core.net import graph_folders, graph_messages, graph_send
+from .core.models.pending_action import ACTION_FLAG, ACTION_MOVE, PendingAction
+from .core.net import errors, graph_folders, graph_messages, graph_send
 from .core.net.auth import Credential
 from .core.net.graph_send import with_bcc
 from .core.net.graph_session import GraphSession
@@ -518,6 +519,60 @@ def send_message(
             account.email,
             exc_info=True,
         )
+
+
+def replay(
+    account: Account, credential: Credential, actions: list[PendingAction]
+) -> tuple[list[int], BaseException | None]:
+    """Run queued actions in order; return the ids that are finished with.
+
+    An action the server refused is finished too -- the message is gone, or
+    the folder is -- and the next sync shows the server's truth. Losing the
+    network again stops the replay, and the error comes back so the caller
+    can keep the rest queued.
+    """
+    finished: list[int] = []
+    for action in actions:
+        try:
+            _replay_one(account, credential, action)
+        except Exception as error:
+            if errors.is_connectivity(error):
+                close_sessions(account.id)
+                return finished, error
+            logger.warning(
+                "dropping a queued %s of %d message(s) in %s (account %s)",
+                action.kind,
+                len(action.uids),
+                action.folder_name,
+                account.email,
+                exc_info=True,
+            )
+        finished.append(action.id)
+    return finished, None
+
+
+def _replay_one(
+    account: Account, credential: Credential, action: PendingAction
+) -> None:
+    if action.kind == ACTION_FLAG:
+        set_flag(
+            account,
+            credential,
+            action.folder_name,
+            action.uids,
+            action.flag,
+            action.should_add,
+        )
+    elif action.kind == ACTION_MOVE:
+        result = move_messages(
+            account,
+            credential,
+            action.folder_name,
+            list(action.uids),
+            action.destination,
+        )
+        if result.error is not None:
+            raise ImapError(result.error)
 
 
 def save_draft(

@@ -17,6 +17,7 @@ from ..models.conversation import Conversation
 from ..models.email import Email
 from ..models.folder import Folder
 from ..models.message_header import MessageHeader
+from ..models.pending_action import PendingAction
 
 # Every column _email_from_row reads
 _EMAIL_COLUMNS = """
@@ -101,6 +102,19 @@ MIGRATIONS = [
     # Bcc never goes into the stored message, so a queued one has to remember
     # it here or a retry from the Outbox would drop those recipients.
     "ALTER TABLE emails ADD COLUMN bcc TEXT NOT NULL DEFAULT ''",
+    # Flag changes and moves made offline, replayed in id order on reconnect.
+    """
+    CREATE TABLE pending_actions (
+        id INTEGER PRIMARY KEY,
+        account_id INTEGER NOT NULL REFERENCES accounts(id),
+        kind TEXT NOT NULL,
+        folder_name TEXT NOT NULL,
+        uids TEXT NOT NULL,
+        flag TEXT NOT NULL DEFAULT '',
+        should_add INTEGER NOT NULL DEFAULT 0,
+        destination TEXT NOT NULL DEFAULT ''
+    );
+    """,
 ]
 
 
@@ -306,6 +320,9 @@ class Database:
             (account_id,),
         )
         self._conn.execute("DELETE FROM folders WHERE account_id = ?", (account_id,))
+        self._conn.execute(
+            "DELETE FROM pending_actions WHERE account_id = ?", (account_id,)
+        )
         self._conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         self._conn.commit()
 
@@ -793,6 +810,53 @@ class Database:
             references=row["reference_ids"] or "",
             conversation_id=row["conversation_id"],
         )
+
+    # --- actions waiting for the network --------------------------------------
+
+    def queue_action(self, action: PendingAction) -> None:
+        """Store an action to replay later; its id is assigned here."""
+        self._conn.execute(
+            """
+            INSERT INTO pending_actions
+                (account_id, kind, folder_name, uids, flag, should_add, destination)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                action.account_id,
+                action.kind,
+                action.folder_name,
+                "\n".join(action.uids),
+                action.flag,
+                int(action.should_add),
+                action.destination,
+            ),
+        )
+        self._conn.commit()
+
+    def pending_actions(self, account_id: int) -> list[PendingAction]:
+        rows = self._conn.execute(
+            "SELECT * FROM pending_actions WHERE account_id = ? ORDER BY id",
+            (account_id,),
+        ).fetchall()
+        return [
+            PendingAction(
+                id=row["id"],
+                account_id=row["account_id"],
+                kind=row["kind"],
+                folder_name=row["folder_name"],
+                uids=tuple(row["uids"].split("\n")) if row["uids"] else (),
+                flag=row["flag"],
+                should_add=bool(row["should_add"]),
+                destination=row["destination"],
+            )
+            for row in rows
+        ]
+
+    def delete_pending_actions(self, action_ids: Sequence[int]) -> None:
+        self._conn.executemany(
+            "DELETE FROM pending_actions WHERE id = ?", [(i,) for i in action_ids]
+        )
+        self._conn.commit()
 
     # --- contacts -----------------------------------------------------------
 

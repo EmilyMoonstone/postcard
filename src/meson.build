@@ -71,6 +71,7 @@ postcard_core_models_sources = [
   'postcard/core/models/mailbox.py',
   'postcard/core/models/email.py',
   'postcard/core/models/message_header.py',
+  'postcard/core/models/pending_action.py',
   'postcard/core/models/conversation.py',
   'postcard/core/models/attachment.py',
 ]
