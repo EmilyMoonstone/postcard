@@ -718,3 +718,21 @@ def test_a_sync_without_a_preview_keeps_the_one_stored(db, folder):
     incoming(db, folder.id, "7", preview="")
 
     assert db.emails_in_folder(folder.id)[0].preview == "Kept"
+
+
+def test_a_queued_message_keeps_its_bcc_recipients(db, folder):
+    row = db.save_email(
+        folder.id, sender="me", subject="s", preview="", date="", is_unread=False
+    )
+
+    db.save_bcc(row.id, ["eve@example.com", "mallory@example.com"])
+
+    assert db.bcc_for(row.id) == ["eve@example.com", "mallory@example.com"]
+
+
+def test_a_message_without_bcc_has_none(db, folder):
+    row = db.save_email(
+        folder.id, sender="me", subject="s", preview="", date="", is_unread=False
+    )
+
+    assert db.bcc_for(row.id) == []

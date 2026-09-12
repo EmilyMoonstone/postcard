@@ -98,6 +98,9 @@ MIGRATIONS = [
     ALTER TABLE folders ADD COLUMN role TEXT NOT NULL DEFAULT '';
     ALTER TABLE folders ADD COLUMN label TEXT NOT NULL DEFAULT '';
     """,
+    # Bcc never goes into the stored message, so a queued one has to remember
+    # it here or a retry from the Outbox would drop those recipients.
+    "ALTER TABLE emails ADD COLUMN bcc TEXT NOT NULL DEFAULT ''",
 ]
 
 
@@ -733,6 +736,18 @@ class Database:
         )
         self._conn.commit()
         return True
+
+    def save_bcc(self, email_id: int, addresses: list[str]) -> None:
+        self._conn.execute(
+            "UPDATE emails SET bcc = ? WHERE id = ?", ("\n".join(addresses), email_id)
+        )
+        self._conn.commit()
+
+    def bcc_for(self, email_id: int) -> list[str]:
+        row = self._conn.execute(
+            "SELECT bcc FROM emails WHERE id = ?", (email_id,)
+        ).fetchone()
+        return row["bcc"].split("\n") if row and row["bcc"] else []
 
     def delete_email(self, email_id: int) -> None:
         self._conn.execute("DELETE FROM emails WHERE id = ?", (email_id,))

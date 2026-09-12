@@ -532,6 +532,7 @@ class PostcardComposerWindow(Adw.Window):
             is_unread=False,
         )
         self._db.save_raw_message(row.id, raw)
+        self._db.save_bcc(row.id, bcc_addrs)
 
         self._set_sending(True)
         thread = threading.Thread(

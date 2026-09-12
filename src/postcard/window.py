@@ -2199,7 +2199,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             raw = self._db.get_raw_message(mail.id)
             if raw is None:
                 continue
-            jobs.append((mail.id, mail.subject, compose.extract_recipients(raw), raw))
+            recipients = compose.extract_recipients(raw, self._db.bcc_for(mail.id))
+            jobs.append((mail.id, mail.subject, recipients, raw))
         if not jobs:
             return
 

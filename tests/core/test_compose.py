@@ -267,3 +267,9 @@ def test_parse_mailto_merges_path_and_query_recipients():
 def test_message_id_reads_a_stored_message_s_header():
     assert message_id(b"Message-ID: <a@b>\n\nbody") == "<a@b>"
     assert message_id(b"Subject: x\n\nbody") == ""
+
+
+def test_outbox_recipients_include_the_bcc_kept_beside_the_message():
+    raw = b"To: a@x\nCc: b@x\n\nbody"
+
+    assert extract_recipients(raw, ["c@x", "a@x"]) == ["a@x", "b@x", "c@x"]
