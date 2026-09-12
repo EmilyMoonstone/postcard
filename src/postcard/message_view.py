@@ -133,6 +133,7 @@ class MessageView(Gtk.Box):
         on_unsubscribe: UnsubscribeCallback,
         on_rendered: Callable[["MessageView"], None] | None = None,
         on_respond: InvitationCallback | None = None,
+        own_address: str = "",
         is_expanded: bool = False,
         should_load_remote_images: bool = False,
         delivered_to: str = "",
@@ -148,6 +149,9 @@ class MessageView(Gtk.Box):
         self._on_rendered = on_rendered
         self._on_unsubscribe = on_unsubscribe
         self._on_respond = on_respond
+        # The account the message is in: an invitation it organized itself is
+        # shown, but there is nobody to answer.
+        self._own_address = own_address.lower()
         self._response_buttons: list[Gtk.Button] = []
         self._response_status: Gtk.Label | None = None
         self._should_load_remote_images = should_load_remote_images
@@ -347,7 +351,11 @@ class MessageView(Gtk.Box):
                 inner.append(
                     Gtk.Label(label=f"{address}: {_status_label(status)}", xalign=0)
                 )
-        elif invitation.method == invitations.METHOD_REQUEST and self._on_respond:
+        elif (
+            invitation.method == invitations.METHOD_REQUEST
+            and self._on_respond
+            and invitation.organizer != self._own_address
+        ):
             inner.append(self._response_row(invitation))
 
         self._body.append(card)

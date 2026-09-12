@@ -2116,6 +2116,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 on_rendered=self._on_newest_rendered if is_newest else None,
                 on_unsubscribe=self._on_unsubscribe,
                 on_respond=self._respond_to_invitation,
+                own_address=account.email if account is not None else "",
                 is_expanded=is_newest,
                 should_load_remote_images=should_load_remote_images,
                 delivered_to=delivered_to,
