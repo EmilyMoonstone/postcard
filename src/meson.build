@@ -55,6 +55,7 @@ python_installation.install_sources(postcard_sources, subdir: 'postcard')
 postcard_core_sources = [
   'postcard/core/__init__.py',
   'postcard/core/secrets.py',
+  'postcard/core/smart_inbox.py',
   'postcard/core/goa.py',
   'postcard/core/autostart.py',
   'postcard/core/categories.py',
