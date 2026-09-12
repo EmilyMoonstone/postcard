@@ -292,6 +292,26 @@ class PostcardComposerWindow(Adw.Window):
 
     def _on_from_changed(self, *_args: object) -> None:
         self._account = self._accounts[self.from_row.get_selected()]
+        self._swap_signature(self._db.signature_text_for(self._account.id))
+
+    # The signature block is the one <div class="signature"> in the body:
+    # replaced for the new sender's, removed if it has none, and added at the
+    # end if the old sender had none.
+    def _swap_signature(self, text: str) -> None:
+        block = json.dumps(compose.signature_block(text) if text else "")
+        self._webview.evaluate_javascript(
+            "(function (html) {"
+            " var old = document.querySelector('.signature');"
+            " if (old && html) { old.outerHTML = html; }"
+            " else if (old) { old.remove(); }"
+            " else if (html) { document.body.insertAdjacentHTML('beforeend', html); }"
+            " post();"
+            f"}})({block})",
+            -1,
+            None,
+            None,
+            None,
+        )
 
     # --- editor ------------------------------------------------------------
 
@@ -666,15 +686,10 @@ def composer_for_mailto(
     app: Gtk.Application | None,
     db: Database,
     account: Account,
-    settings: Gio.Settings,
     uri: str,
 ) -> PostcardComposerWindow:
     draft = compose.parse_mailto(uri)
-    signature = (
-        settings.get_string("signature-text").strip()
-        if settings.get_boolean("signature-enabled")
-        else ""
-    )
+    signature = db.signature_text_for(account.id)
     return PostcardComposerWindow(
         app,
         db,

@@ -4,6 +4,8 @@ from gettext import gettext as _
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from .core import autostart
+from .core.models.signature import Signature
+from .core.store.database import Database
 from .window_types import SETTING_SYNC_INTERVAL
 
 logger = logging.getLogger(__name__)
@@ -37,34 +39,29 @@ class PostcardPreferencesDialog(Adw.PreferencesDialog):
     __gtype_name__ = "PostcardPreferencesDialog"
 
     notifications_row: Adw.SwitchRow = Gtk.Template.Child()
-    images_row: Adw.SwitchRow = Gtk.Template.Child()
     avatars_row: Adw.SwitchRow = Gtk.Template.Child()
     account_names_row: Adw.SwitchRow = Gtk.Template.Child()
     background_row: Adw.SwitchRow = Gtk.Template.Child()
     autostart_row: Adw.SwitchRow = Gtk.Template.Child()
     interval_row: Adw.ComboRow = Gtk.Template.Child()
-    signature_enabled_row: Adw.SwitchRow = Gtk.Template.Child()
-    signature_view: Gtk.TextView = Gtk.Template.Child()
+    push_row: Adw.SwitchRow = Gtk.Template.Child()
+    signatures_group: Adw.PreferencesGroup = Gtk.Template.Child()
+    add_signature_button: Gtk.Button = Gtk.Template.Child()
 
-    def __init__(self, settings: Gio.Settings) -> None:
+    def __init__(self, settings: Gio.Settings, db: Database) -> None:
         super().__init__()
         self._settings = settings
+        self._db = db
+        self._signature_rows: list[Adw.ActionRow] = []
 
         flags = Gio.SettingsBindFlags.DEFAULT
         settings.bind("notifications", self.notifications_row, "active", flags)
-        settings.bind("load-remote-images", self.images_row, "active", flags)
+        settings.bind("push-enabled", self.push_row, "active", flags)
         settings.bind("load-sender-avatars", self.avatars_row, "active", flags)
         settings.bind(
             "show-account-display-name", self.account_names_row, "active", flags
         )
         settings.bind("run-in-background", self.background_row, "active", flags)
-        settings.bind("signature-enabled", self.signature_enabled_row, "active", flags)
-        settings.bind(
-            "signature-enabled",
-            self.signature_view,
-            "sensitive",
-            Gio.SettingsBindFlags.GET,
-        )
 
         self.interval_row.set_model(
             Gtk.StringList.new([label for _minutes, label in SYNC_INTERVALS])
@@ -80,9 +77,10 @@ class PostcardPreferencesDialog(Adw.PreferencesDialog):
         self.autostart_row.set_active(settings.get_boolean(SETTING_START_AT_LOGIN))
         self.autostart_row.connect("notify::active", self._on_autostart_toggled)
 
-        buffer = self.signature_view.get_buffer()
-        buffer.set_text(settings.get_string("signature-text"))
-        buffer.connect("changed", self._on_signature_changed)
+        self.add_signature_button.connect(
+            "clicked", lambda _b: self._edit_signature(None)
+        )
+        self._reload_signatures()
 
     @staticmethod
     def _interval_index(minutes: int) -> int:
@@ -95,9 +93,76 @@ class PostcardPreferencesDialog(Adw.PreferencesDialog):
         minutes, _label = SYNC_INTERVALS[row.get_selected()]
         self._settings.set_int(SETTING_SYNC_INTERVAL, minutes)
 
-    def _on_signature_changed(self, buffer: Gtk.TextBuffer) -> None:
-        start, end = buffer.get_bounds()
-        self._settings.set_string("signature-text", buffer.get_text(start, end, False))
+    # --- signatures ---------------------------------------------------------
+
+    def _reload_signatures(self) -> None:
+        for row in self._signature_rows:
+            self.signatures_group.remove(row)
+        self._signature_rows.clear()
+        for signature in self._db.signatures():
+            first_line = (
+                signature.body.strip().splitlines()[0] if signature.body.strip() else ""
+            )
+            row = Adw.ActionRow(
+                title=signature.name, subtitle=first_line, activatable=True
+            )
+            row.connect("activated", lambda _r, s=signature: self._edit_signature(s))
+            delete = Gtk.Button(
+                icon_name="user-trash-symbolic",
+                valign=Gtk.Align.CENTER,
+                tooltip_text=_("Delete Signature"),
+            )
+            delete.add_css_class("flat")
+            delete.connect("clicked", self._on_delete_signature, signature.id)
+            row.add_suffix(delete)
+            self.signatures_group.add(row)
+            self._signature_rows.append(row)
+
+    def _edit_signature(self, signature: Signature | None) -> None:
+        """A dialog with the name and text; None adds a new signature."""
+        name = Gtk.Entry(
+            placeholder_text=_("Name"),
+            text=signature.name if signature else "",
+            activates_default=False,
+        )
+        text = Gtk.TextView(
+            wrap_mode=Gtk.WrapMode.WORD_CHAR,
+            top_margin=8,
+            bottom_margin=8,
+            left_margin=8,
+            right_margin=8,
+        )
+        text.get_buffer().set_text(signature.body if signature else "")
+        scroller = Gtk.ScrolledWindow(child=text, height_request=160)
+        scroller.add_css_class("card")
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        content.append(name)
+        content.append(scroller)
+
+        dialog = Adw.AlertDialog(
+            heading=_("Edit Signature") if signature else _("New Signature"),
+            extra_child=content,
+        )
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("save", _("Save"))
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_close_response("cancel")
+
+        def on_response(_dialog: Adw.AlertDialog, response: str) -> None:
+            if response != "save":
+                return
+            buffer = text.get_buffer()
+            body = buffer.get_text(*buffer.get_bounds(), False)
+            label = name.get_text().strip() or _("Signature")
+            self._db.save_signature(label, body, signature.id if signature else None)
+            self._reload_signatures()
+
+        dialog.connect("response", on_response)
+        dialog.present(self)
+
+    def _on_delete_signature(self, _button: Gtk.Button, signature_id: int) -> None:
+        self._db.delete_signature(signature_id)
+        self._reload_signatures()
 
     def _on_autostart_toggled(self, row: Adw.SwitchRow, _param: object) -> None:
         is_wanted = row.get_active()

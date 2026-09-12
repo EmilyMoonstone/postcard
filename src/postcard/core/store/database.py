@@ -18,6 +18,7 @@ from ..models.email import Email
 from ..models.folder import Folder
 from ..models.message_header import MessageHeader
 from ..models.pending_action import PendingAction
+from ..models.signature import Signature
 
 # Every column _email_from_row reads
 _EMAIL_COLUMNS = """
@@ -124,6 +125,17 @@ MIGRATIONS = [
     CREATE TABLE sender_categories (
         address TEXT PRIMARY KEY,
         category TEXT NOT NULL
+    );
+    """,
+    # Per-account settings that used to be global. The app copies the old
+    # global values over once (application.migrate_global_settings).
+    """
+    ALTER TABLE accounts ADD COLUMN load_remote_images INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE accounts ADD COLUMN signature_id INTEGER;
+    CREATE TABLE signatures (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        body TEXT NOT NULL
     );
     """,
 ]
@@ -263,6 +275,8 @@ class Database:
             goa_id=row["goa_id"],
             protocol=row["protocol"],
             is_bundled=bool(row["is_bundled"]),
+            load_remote_images=bool(row["load_remote_images"]),
+            signature_id=row["signature_id"],
         )
 
     def accounts(self) -> list[Account]:
@@ -316,6 +330,35 @@ class Database:
             "SELECT * FROM accounts WHERE id = ?", (cursor.lastrowid,)
         ).fetchone()
         return self._account_from_row(row)
+
+    def update_account(self, account: Account) -> None:
+        """Write back every editable field of an account."""
+        self._conn.execute(
+            """
+            UPDATE accounts SET
+                email = ?, display_name = ?, username = ?,
+                imap_host = ?, imap_port = ?, imap_security = ?,
+                smtp_host = ?, smtp_port = ?, smtp_security = ?,
+                is_bundled = ?, load_remote_images = ?, signature_id = ?
+            WHERE id = ?
+            """,
+            (
+                account.email,
+                account.display_name,
+                account.username,
+                account.imap_host,
+                account.imap_port,
+                account.imap_security,
+                account.smtp_host,
+                account.smtp_port,
+                account.smtp_security,
+                int(account.is_bundled),
+                int(account.load_remote_images),
+                account.signature_id,
+                account.id,
+            ),
+        )
+        self._conn.commit()
 
     def set_account_bundled(self, account_id: int, is_bundled: bool) -> None:
         self._conn.execute(
@@ -589,6 +632,21 @@ class Database:
         ).fetchall()
         return [row["id"] for row in rows]
 
+    def latest_emails(self, folder_ids: Sequence[int], limit: int) -> list[Email]:
+        """The newest messages the server knows of across these folders."""
+        if not folder_ids:
+            return []
+        places = ",".join("?" * len(folder_ids))
+        rows = self._conn.execute(
+            f"""
+            SELECT {_EMAIL_COLUMNS} FROM emails
+            WHERE folder_id IN ({places}) AND server_id IS NOT NULL
+            ORDER BY date DESC LIMIT ?
+            """,
+            (*folder_ids, limit),
+        ).fetchall()
+        return [self._email_from_row(row) for row in rows]
+
     def unread_count_in_folder(self, folder_id: int) -> int:
         row = self._conn.execute(
             "SELECT COUNT(*) AS n FROM emails WHERE folder_id = ? AND unread = 1",
@@ -853,6 +911,52 @@ class Database:
             category=row["category"],
             is_priority=bool(row["is_priority"]),
         )
+
+    # --- signatures ----------------------------------------------------------
+
+    def signatures(self) -> list[Signature]:
+        rows = self._conn.execute(
+            "SELECT id, name, body FROM signatures ORDER BY name COLLATE NOCASE, id"
+        ).fetchall()
+        return [Signature(row["id"], row["name"], row["body"]) for row in rows]
+
+    def save_signature(
+        self, name: str, body: str, signature_id: int | None = None
+    ) -> int:
+        """Create a signature, or replace the one with signature_id; its id."""
+        if signature_id is None:
+            cursor = self._conn.execute(
+                "INSERT INTO signatures (name, body) VALUES (?, ?)", (name, body)
+            )
+            self._conn.commit()
+            assert cursor.lastrowid is not None
+            return cursor.lastrowid
+        self._conn.execute(
+            "UPDATE signatures SET name = ?, body = ? WHERE id = ?",
+            (name, body, signature_id),
+        )
+        self._conn.commit()
+        return signature_id
+
+    def delete_signature(self, signature_id: int) -> None:
+        with self._conn:
+            self._conn.execute(
+                "UPDATE accounts SET signature_id = NULL WHERE signature_id = ?",
+                (signature_id,),
+            )
+            self._conn.execute("DELETE FROM signatures WHERE id = ?", (signature_id,))
+
+    def signature_text_for(self, account_id: int) -> str:
+        """The body of an account's default signature, "" for none."""
+        row = self._conn.execute(
+            """
+            SELECT signatures.body FROM accounts
+            JOIN signatures ON signatures.id = accounts.signature_id
+            WHERE accounts.id = ?
+            """,
+            (account_id,),
+        ).fetchone()
+        return row["body"].strip() if row else ""
 
     # --- sorting and priority ------------------------------------------------
 

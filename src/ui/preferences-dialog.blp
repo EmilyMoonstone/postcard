@@ -13,11 +13,6 @@ template $PostcardPreferencesDialog: Adw.PreferencesDialog {
         subtitle: _("Show a notification when new mail arrives");
       }
 
-      Adw.SwitchRow images_row {
-        title: _("Load Remote Images");
-        subtitle: _("Load images from the internet without asking");
-      }
-
       Adw.SwitchRow avatars_row {
         title: _("Load Sender Avatars");
         subtitle: _("Fetch sender pictures from Gravatar, which tells them who emails you");
@@ -38,33 +33,34 @@ template $PostcardPreferencesDialog: Adw.PreferencesDialog {
         subtitle: _("Start hidden when you log in and keep checking for mail");
       }
 
-      Adw.ComboRow interval_row {
-        title: _("Check for Mail");
-        subtitle: _("How often to look for new mail");
-      }
     }
 
     Adw.PreferencesGroup {
-      title: _("Signature");
+      title: _("Getting Mail");
 
-      Adw.SwitchRow signature_enabled_row {
-        title: _("Append Signature");
-        subtitle: _("Add a signature to messages you send");
+      Adw.SwitchRow push_row {
+        title: _("New Mail Instantly");
+        subtitle: _("The server tells Postcard the moment mail arrives in an inbox. Microsoft 365 is asked every minute.");
       }
 
-      Gtk.ScrolledWindow {
-        height-request: 120;
-        margin-top: 12;
+      Adw.ComboRow interval_row {
+        title: _("Sync All Folders");
+        subtitle: _("Also catches changes push doesn't report: other folders, and mail read or moved elsewhere");
+      }
+    }
 
-        styles ["card"]
+    // Filled in preferences_dialog.py, one row per signature.
+    Adw.PreferencesGroup signatures_group {
+      title: _("Signatures");
+      description: _("Pick each account's signature under Manage Accounts.");
 
-        child: Gtk.TextView signature_view {
-          top-margin: 8;
-          bottom-margin: 8;
-          left-margin: 8;
-          right-margin: 8;
-          wrap-mode: word_char;
-        };
+      [header-suffix]
+      Gtk.Button add_signature_button {
+        icon-name: "list-add-symbolic";
+        tooltip-text: _("Add Signature");
+        valign: center;
+
+        styles ["flat"]
       }
     }
   }

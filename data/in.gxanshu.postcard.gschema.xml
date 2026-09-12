@@ -46,6 +46,11 @@
 			<summary>How the inbox is laid out</summary>
 			<description>"importance" puts priority threads first and folds newsletters, notifications, invitations and bundled accounts into one row each; "category" lists every thread under its category; "date" lists them by date only.</description>
 		</key>
+		<key name="push-enabled" type="b">
+			<default>true</default>
+			<summary>Get new mail instantly</summary>
+			<description>Keep a connection open so the server can tell Postcard about new mail as it arrives (IMAP IDLE); Microsoft 365 accounts are asked every minute instead.</description>
+		</key>
 		<key name="sync-interval-minutes" type="i">
 			<range min="0" max="1440"/>
 			<default>15</default>

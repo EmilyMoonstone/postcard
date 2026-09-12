@@ -73,19 +73,19 @@ template $PostcardMainWindow: Adw.ApplicationWindow {
               [top]
               Adw.HeaderBar {
                 [start]
-                Gtk.Button compose_button {
-                  icon-name: "mail-message-new-symbolic";
-                  tooltip-text: _("New Message");
-
-                  styles ["suggested-action"]
-                }
-
-                [end]
                 Gtk.MenuButton {
                   primary: true;
                   icon-name: "open-menu-symbolic";
                   tooltip-text: _("Main Menu");
                   menu-model: primary_menu;
+                }
+
+                [end]
+                Gtk.Button compose_button {
+                  icon-name: "mail-message-new-symbolic";
+                  tooltip-text: _("New Message");
+
+                  styles ["suggested-action"]
                 }
               }
 

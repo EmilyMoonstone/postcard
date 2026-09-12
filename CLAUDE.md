@@ -103,6 +103,18 @@ Both are Spark's organization in libadwaita's look.
 - **Layout** is `core/smart_inbox.py`, pure and tested: `build()` turns the conversations of an inbox view into `InboxSection`s, `Bundle`s and conversations for the chosen view (`inbox-view` setting), and `open_bundle()` lists one bundle. The window's list store therefore holds three GObject types; read items with `isinstance`, and `inbox_rows.InboxItemRow` shows whichever kind a recycled row is bound to. Bundles fold only in inbox views without a search, and a bundled account (`accounts.is_bundled`, set in the Accounts dialog) only in the cross-account Inbox.
 - **The sidebar** is built from role groups, not accounts: `_virtual_folders` are `Folder` objects with negative ids (`window_types.ALL_INBOXES_ID` …) whose children are each account's folder of that role (`_group_members`), plus a heading and a "More" row that opens a popover of the remaining folders. `_is_unified()` means any group is open, `_view_folders()` expands a group into its member folders, and Starred is a query across every folder rather than a folder set. A folder opened from "More" leaves the tree unselected on purpose.
 
+### Accounts and their settings
+
+- `account_dialog.py` both adds and edits (`PostcardAccountDialog(db, account)`). Nothing is saved until `mail_sync.check_account` has signed in to both servers on a worker thread, unless the user presses "Save Anyway" on the failure banner; an edit is only checked when a sign-in field changed. A GOA account only edits name, images and signature.
+- Server settings come from `core/autoconfig.discover` (provider table → the domain's autoconfig → Mozilla ISPDB → RFC 6186 SRV → MX host matched to `core/hosting.PRESETS`, else ISPDB under the MX domain), all on a worker thread with DNS through `Gio.Resolver`. A hosting preset whose server is the customer's own MX host (netcup, all-inkl) is resolved with the MX host that matched, not the first one: a domain can list its own name first, and only the provider's host has the certificate. Autofill never overwrites what the user typed (`_autofilled_text`).
+- Remote images and the default signature are per account (`accounts.load_remote_images`, `accounts.signature_id` → `signatures`). The old global keys are carried over once by `core/settings_migration.py` at startup. The composer's signature is the one `<div class="signature">` in the body, swapped by JS when From changes.
+- Push (`push-enabled`) is its own switch: IDLE only reports inboxes, so the sync interval still covers other folders and changes made elsewhere.
+- The tray menu lists the newest inbox mail (`Tray.set_latest`, pushed from `_push_tray_unread`) and opens one through `app.open-mail`.
+
+### Message bodies
+
+A body is sandboxed HTML in a WebView whose page runs no script (`enable-javascript-markup` off, CSP `default-src 'none'`); JavaScript stays on only so `MessageView._measure` can read the laid-out height from an isolated world and size the view to it, re-measuring after late images. `sandbox_html(is_dark=)` gives the page the reader's colours as defaults; the round button over each body flips it for that message only.
+
 ### No account is a real state
 
 `_load_mail_view` is skipped entirely when the database has no accounts, so everything it assigns — `_account`, the conversation store, the folder tree — does not exist yet, while background callbacks (the sync timer, `network-changed`, notification actions, accelerators) can still fire. Read that state through a guard clause, never directly. Four separate crashes have come from forgetting this; if you add a method that touches per-account state, check it against a window built on an empty database.

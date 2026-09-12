@@ -240,3 +240,13 @@ def test_an_invitation_part_is_parsed_out_of_the_message():
 
 def test_ordinary_mail_has_no_invitation():
     assert parse_message(b"From: a@x\r\n\r\nhello").invitation is None
+
+
+def test_a_body_follows_the_reader_s_light_or_dark_colours() -> None:
+    dark = sandbox_html("<p>hi</p>", are_remote_images_allowed=False, is_dark=True)
+    light = sandbox_html("<p>hi</p>", are_remote_images_allowed=False)
+
+    assert "color-scheme:dark" in dark and "#1e1e1e" in dark
+    assert "color-scheme:light" in light and "#ffffff" in light
+    # Still no remote subresources either way.
+    assert "img-src data:" in dark

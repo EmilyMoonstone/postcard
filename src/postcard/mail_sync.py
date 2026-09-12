@@ -628,6 +628,38 @@ def _replay_one(
             raise ImapError(result.error)
 
 
+class AccountCheckError(Exception):
+    """Signing in to one of an account's servers failed; the cause says why."""
+
+    def __init__(self, server: str, host: str) -> None:
+        super().__init__(f"could not sign in to {server} server {host}")
+        self.server = server
+        self.host = host
+
+
+def check_account(account: Account, credential: Credential) -> None:
+    """Sign in to the account's servers once, as a test before saving it.
+
+    Never pooled: the account may not exist yet, and a connection opened with
+    settings the user is still editing must not outlive the test.
+    """
+    if account.is_graph:
+        GraphSession(credential).get("/me?$select=id")
+        return
+    try:
+        _signed_in(account, credential).logout()
+    except Exception as error:
+        raise AccountCheckError("IMAP", account.imap_host) from error
+    smtp = SmtpSession(account.smtp_host, account.smtp_port, account.smtp_security)
+    try:
+        smtp.connect()
+        smtp.sign_in(credential)
+    except Exception as error:
+        raise AccountCheckError("SMTP", account.smtp_host) from error
+    finally:
+        smtp.quit()
+
+
 def respond_to_invitation(
     account: Account,
     credential: Credential,

@@ -2,98 +2,154 @@ using Gtk 4.0;
 using Adw 1;
 
 template $PostcardAccountDialog: Adw.Dialog {
-    title: _("Add Account");
-    content-width: 480;
-    content-height: 560;
+  title: _("Add Account");
+  content-width: 520;
+  content-height: 680;
 
-    child: Adw.ToolbarView {
-        [top]
-        Adw.HeaderBar {
-            show-start-title-buttons: false;
-            show-end-title-buttons: false;
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      show-start-title-buttons: false;
+      show-end-title-buttons: false;
 
-            [start]
-            Gtk.Button cancel_button {
-                label: _("Cancel");
-              }
-              
-            [end]
-            Gtk.Button add_button {
-                label: _("Add");
-                sensitive: false;
+      [start]
+      Gtk.Button cancel_button {
+        label: _("Cancel");
+      }
 
-                styles ["suggested-action"]
-              }
+      [end]
+      Gtk.Button add_button {
+        label: _("Add");
+        sensitive: false;
+
+        styles ["suggested-action"]
+      }
+
+      [end]
+      Adw.Spinner check_spinner {
+        visible: false;
+      }
+    }
+
+    // A failed connection test: the reason, and a way past it for a server
+    // that is only unreachable from here right now.
+    [top]
+    Adw.Banner status_banner {
+      button-label: _("Save Anyway");
+    }
+
+    content: Gtk.ScrolledWindow {
+      child: Adw.PreferencesPage {
+        Adw.PreferencesGroup account_group {
+          title: _("Account");
+
+          Adw.EntryRow display_name_row {
+            title: _("Display Name");
           }
 
-          content: Gtk.ScrolledWindow {
-              child: Adw.PreferencesPage {
-                  Adw.PreferencesGroup {
-                      title: _("Account");
-                      description: _("Most servers sign you in with your email address. Change the username if yours expects a different one.");
+          Adw.EntryRow email_row {
+            title: _("Email Address");
+            input-purpose: email;
+          }
 
-                      Adw.EntryRow display_name_row {
-                          title: _("Display Name");
-                        }
+          Adw.EntryRow username_row {
+            title: _("Username");
+          }
 
-                      Adw.EntryRow email_row {
-                          title: _("Email Address");
-                          input-purpose: email;
-                        }
+          Adw.PasswordEntryRow password_row {
+            title: _("Password");
+          }
+        }
 
-                      Adw.EntryRow username_row {
-                          title: _("Username");
-                        }
+        Adw.PreferencesGroup provider_group {
+          title: _("Server Settings");
+          description: _("Filled in from your address when Postcard can find them. Pick your mail provider if it can't.");
 
-                      Adw.PasswordEntryRow password_row {
-                          title: _("Password");
-                        }
-                    }
+          Adw.ComboRow hosting_row {
+            title: _("Mail Provider");
+            enable-search: true;
+          }
 
-                  Adw.PreferencesGroup {
-                      title: _("Incoming Mail (IMAP)");
+          Adw.ActionRow discovery_row {
+            visible: false;
 
-                      Adw.EntryRow imap_host_row {
-                          title: _("Server");
-                        }
+            [suffix]
+            Adw.Spinner discovery_spinner {
+              visible: false;
+            }
 
-                      Adw.EntryRow imap_port_row {
-                          title: _("Port");
-                          input-purpose: digits;
-                          text: "993";
-                        }
+            styles ["property"]
+          }
+        }
 
-                      Adw.ComboRow imap_security_row {
-                          title: _("Connection Security");
-                          model: Gtk.StringList {
-                              strings ["TLS", "STARTTLS"]
-                          };
-                          selected: 0;
-                      }
-                    }
+        Adw.PreferencesGroup imap_group {
+          title: _("Incoming Mail (IMAP)");
 
-                  Adw.PreferencesGroup {
-                      title: _("Outgoing Mail (SMTP)");
+          Adw.EntryRow imap_host_row {
+            title: _("Server");
+          }
 
-                      Adw.EntryRow smtp_host_row {
-                          title: _("Server");
-                        }
+          Adw.EntryRow imap_port_row {
+            title: _("Port");
+            input-purpose: digits;
+            text: "993";
+          }
 
-                      Adw.EntryRow smtp_port_row {
-                          title: _("Port");
-                          input-purpose: digits;
-                          text: "587";
-                        }
+          Adw.ComboRow imap_security_row {
+            title: _("Connection Security");
 
-                      Adw.ComboRow smtp_security_row {
-                          title: _("Connection Security");
-                          model: Gtk.StringList {
-                              strings ["TLS", "STARTTLS"]
-                          };
-                          selected: 1;
-                      }
-                    }
-                };
+            model: Gtk.StringList {
+              strings [
+                "TLS",
+                "STARTTLS",
+              ]
             };
+
+            selected: 0;
+          }
+        }
+
+        Adw.PreferencesGroup smtp_group {
+          title: _("Outgoing Mail (SMTP)");
+
+          Adw.EntryRow smtp_host_row {
+            title: _("Server");
+          }
+
+          Adw.EntryRow smtp_port_row {
+            title: _("Port");
+            input-purpose: digits;
+            text: "587";
+          }
+
+          Adw.ComboRow smtp_security_row {
+            title: _("Connection Security");
+
+            model: Gtk.StringList {
+              strings [
+                "TLS",
+                "STARTTLS",
+              ]
+            };
+
+            selected: 1;
+          }
+        }
+
+        Adw.PreferencesGroup {
+          title: _("Options");
+
+          Adw.SwitchRow remote_images_row {
+            title: _("Load Remote Images");
+            subtitle: _("Show images from the internet in this account's mail without asking");
+          }
+
+          Adw.ComboRow signature_row {
+            title: _("Signature");
+            subtitle: _("Added to new messages from this account. Manage signatures in Preferences.");
+          }
+        }
       };
-  }
+    };
+  };
+}
