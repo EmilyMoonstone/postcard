@@ -94,10 +94,19 @@ def seed_accounts(path: Path) -> None:
         goa_id="account_gone",
         protocol=PROTOCOL_GRAPH,
     )
+    graph = db.accounts()[-1]
     inbox = db.get_or_create_folder(imap.id, "INBOX", "mail-unread-symbolic")
     db.get_or_create_folder(imap.id, "Archive", "mail-archive-symbolic")
     db.get_or_create_folder(imap.id, "Trash", "user-trash-symbolic")
-    for uid, subject in (("1", "Lunch"), ("2", "Invoice")):
+    graph_inbox = db.get_or_create_folder(graph.id, "AAMkInbox")
+    db.set_folder_identity(graph_inbox.id, "inbox", "Posteingang")
+    db.set_account_bundled(graph.id, True)
+    for uid, subject, category in (
+        ("1", "Lunch", "people"),
+        ("2", "Invoice", "people"),
+        ("3", "Weekly digest", "newsletter"),
+        ("4", "Sign-in alert", "notification"),
+    ):
         db.save_incoming_email(
             inbox.id,
             MessageHeader(
@@ -110,11 +119,29 @@ def seed_accounts(path: Path) -> None:
                 date="2026-09-12T10:00:00+00:00",
                 is_unread=True,
                 preview="Lunch on Thursday?",
-                message_id=f"<{subject.lower()}@example.com>",
+                message_id=f"<{uid}@example.com>",
+                category=category,
+            ),
+        )
+        db.save_incoming_email(
+            graph_inbox.id,
+            MessageHeader(
+                uid=f"g{uid}",
+                sender="Grace",
+                sender_address="grace@contoso.com",
+                recipient="ada@contoso.com",
+                recipient_address="ada@contoso.com",
+                subject=f"Work {subject}",
+                date="2026-09-11T10:00:00+00:00",
+                is_unread=False,
+                message_id=f"<g{uid}@contoso.com>",
+                category=category,
             ),
         )
         db.save_raw_message(db.email_ids_for_server_ids(inbox.id, [uid])[0], INVITATION)
     db.reassign_conversations(inbox.id)
+    db.reassign_conversations(graph_inbox.id)
+    db.set_priority(db.email_ids_for_server_ids(inbox.id, ["2"]), True)
     db.close()
 
 
@@ -147,10 +174,39 @@ def poke_accounts(app: PostcardApplication) -> list[Callable[[], object]]:
 
     def select_first() -> None:
         win = window_of(app)
-        win._selection.select_item(0, True)
+        store = win._conversation_store
+        first = next(
+            i
+            for i in range(store.get_n_items())
+            if type(store.get_item(i)).__name__ == "Conversation"
+        )
+        win._selection.select_item(first, True)
+
+    def open_first_bundle() -> None:
+        win = window_of(app)
+        store = win._conversation_store
+        bundle = next(
+            store.get_item(i)
+            for i in range(store.get_n_items())
+            if type(store.get_item(i)).__name__ == "Bundle"
+        )
+        win._open_bundle(bundle.key)
 
     return [
         lambda: window_of(app)._sync_all(),
+        lambda: window_of(app)._select_folder_by_id(-1),
+        open_first_bundle,
+        select_first,
+        lambda: window_of(app)._on_bundle_back(None),
+        lambda: app.settings.set_string("inbox-view", "category"),
+        lambda: app.settings.set_string("inbox-view", "date"),
+        lambda: app.settings.set_string("inbox-view", "importance"),
+        select_first,
+        lambda: window_of(app)._on_toggle_priority(None, None),
+        lambda: window_of(app)._on_set_category(
+            None, GLib.Variant.new_string("newsletter")
+        ),
+        lambda: window_of(app).open_email(1, "3"),
         select_first,
         lambda: window_of(app)._on_toggle_star(None, None),
         lambda: window_of(app)._on_network_changed(monitor, False),

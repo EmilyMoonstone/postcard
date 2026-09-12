@@ -20,6 +20,7 @@ class ConversationRow(Gtk.Box):
 
         self._avatars = avatars
         self._address = ""
+        self.add_css_class("conversation-row")
 
         self._avatar = Adw.Avatar(size=40, show_initials=True)
         self.append(self._avatar)
@@ -36,6 +37,11 @@ class ConversationRow(Gtk.Box):
         )
         self._sender_label.add_css_class("conversation-sender")
         top.append(self._sender_label)
+
+        self._priority = Gtk.Image.new_from_icon_name("mail-mark-important-symbolic")
+        self._priority.set_pixel_size(12)
+        self._priority.add_css_class("priority-mark")
+        top.append(self._priority)
 
         self._star = Gtk.Image.new_from_icon_name("starred-symbolic")
         self._star.set_pixel_size(12)
@@ -94,6 +100,7 @@ class ConversationRow(Gtk.Box):
         self._load_avatar(address)
         self._sender_label.set_label(participants)
         self._star.set_visible(conversation.is_starred)
+        self._priority.set_visible(conversation.is_priority)
         self._date_label.set_label(mail_sync.format_date(conversation.date))
         self._subject_label.set_label(subject)
         self._preview_label.set_label(conversation.preview)
@@ -103,10 +110,14 @@ class ConversationRow(Gtk.Box):
 
         # CSS class names, not Python identifiers: they have to match the
         # selectors in style.css, which the is_ prefix does not apply to.
-        if conversation.is_unread:
-            self.add_css_class("unread")
-        else:
-            self.remove_css_class("unread")
+        for css_class, is_set in (
+            ("unread", conversation.is_unread),
+            ("priority", conversation.is_priority),
+        ):
+            if is_set:
+                self.add_css_class(css_class)
+            else:
+                self.remove_css_class(css_class)
 
     def _load_avatar(self, address: str) -> None:
         # Rows are recycled, so clear the old face and ignore a fetch that

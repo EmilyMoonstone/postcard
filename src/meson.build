@@ -49,6 +49,7 @@ postcard_sources = [
   'postcard/mail_sync.py',
   'postcard/mail_watch.py',
   'postcard/folder_row.py',
+  'postcard/inbox_rows.py',
 ]
 python_installation.install_sources(postcard_sources, subdir: 'postcard')
 

@@ -122,21 +122,41 @@ template $PostcardMainWindow: Adw.ApplicationWindow {
                   [top]
                   Adw.HeaderBar {
                     [start]
+                    Gtk.Button bundle_back_button {
+                      icon-name: "go-previous-symbolic";
+                      tooltip-text: _("Back to Inbox");
+                      visible: false;
+                    }
+
+                    [start]
                     Gtk.Button refresh_button {
                       icon-name: "view-refresh-symbolic";
                       tooltip-text: _("Refresh Inbox");
                     }
 
-                    [start]
-                    Gtk.ToggleButton unread_button {
-                      icon-name: "unread-only-symbolic";
-                      tooltip-text: _("Show Unread Only");
-                    }
+                    // Spark's "Inbox / Nach Wichtigkeit": the folder on screen,
+                    // and for an inbox, a menu of how it is laid out.
+                    title-widget: Gtk.MenuButton inbox_view_button {
+                      menu-model: inbox_view_menu;
+                      tooltip-text: _("Inbox View");
+
+                      styles ["flat"]
+
+                      child: Adw.WindowTitle inbox_title {
+                        title: _("Inbox");
+                      };
+                    };
 
                     [end]
                     Gtk.ToggleButton search_button {
                       icon-name: "system-search-symbolic";
                       tooltip-text: _("Search");
+                    }
+
+                    [end]
+                    Gtk.ToggleButton unread_button {
+                      icon-name: "unread-only-symbolic";
+                      tooltip-text: _("Show Unread Only");
                     }
                   }
 
@@ -231,6 +251,13 @@ template $PostcardMainWindow: Adw.ApplicationWindow {
                       icon-name: "non-starred-symbolic";
                       tooltip-text: _("Star");
                       action-name: "win.toggle-star";
+                      sensitive: false;
+                    }
+
+                    Gtk.Button priority_button {
+                      icon-name: "mail-mark-important-symbolic";
+                      tooltip-text: _("Mark as Priority");
+                      action-name: "win.toggle-priority";
                       sensitive: false;
                     }
 
@@ -340,6 +367,30 @@ template $PostcardMainWindow: Adw.ApplicationWindow {
     setters {
       outer_split.collapsed: true;
       inner_split.collapsed: true;
+    }
+  }
+}
+
+menu inbox_view_menu {
+  section {
+    label: _("Inbox View");
+
+    item {
+      label: _("By Importance");
+      action: "win.inbox-view";
+      target: "importance";
+    }
+
+    item {
+      label: _("By Category");
+      action: "win.inbox-view";
+      target: "category";
+    }
+
+    item {
+      label: _("By Date");
+      action: "win.inbox-view";
+      target: "date";
     }
   }
 }

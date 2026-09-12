@@ -34,6 +34,12 @@ template $PostcardAccountsDialog: Adw.Dialog {
                           }
                       }
                   }
+
+                // Filled per account in accounts_dialog.py.
+                Adw.PreferencesGroup bundles_group {
+                    title: _("All Inboxes");
+                    description: _("Accounts turned on here appear as one row in All Inboxes, like a category. The rest list each conversation on its own.");
+                }
               };
           };
       };

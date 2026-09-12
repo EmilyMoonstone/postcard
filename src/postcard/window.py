@@ -4,7 +4,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime
+from datetime import date, datetime
 from email import policy
 from email.utils import parseaddr
 from functools import partial
@@ -21,8 +21,8 @@ from .account_dialog import PostcardAccountDialog
 from .accounts_dialog import PostcardAccountsDialog
 from .avatar_loader import AvatarLoader
 from .composer_window import PostcardComposerWindow, composer_for_mailto
-from .conversation_row import ConversationRow
-from .core import compose, secrets
+from .core import compose, secrets, smart_inbox
+from .core.categories import CATEGORIES
 from .core.mime.invitation import Invitation
 from .core.mime.invitation import build_reply as build_invitation_reply
 from .core.mime.message_parser import ParsedMessage, Unsubscribe
@@ -35,6 +35,7 @@ from .core.models.pending_action import ACTION_FLAG, ACTION_MOVE, PendingAction
 from .core.net import errors, imap_session
 from .core.store.database import Database
 from .folder_row import FolderRow
+from .inbox_rows import InboxItemRow, bundle_label, category_label
 from .mail_watch import MailWatcher
 from .message_view import LoadCallback, MessageView
 from .online_accounts_dialog import PostcardOnlineAccountsDialog
@@ -125,6 +126,10 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     search_bar: Gtk.SearchBar = Gtk.Template.Child()
     search_entry: Gtk.SearchEntry = Gtk.Template.Child()
     unread_button: Gtk.ToggleButton = Gtk.Template.Child()
+    bundle_back_button: Gtk.Button = Gtk.Template.Child()
+    inbox_view_button: Gtk.MenuButton = Gtk.Template.Child()
+    inbox_title: Adw.WindowTitle = Gtk.Template.Child()
+    priority_button: Gtk.Button = Gtk.Template.Child()
     compose_button: Gtk.Button = Gtk.Template.Child()
     reply_all_button: Gtk.Button = Gtk.Template.Child()
     reply_button: Gtk.Button = Gtk.Template.Child()
@@ -182,6 +187,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._current_folder: Folder | None = None
         self._active_view: MessageView | None = None
         self._search_timeout: int = 0
+        # The bundle row the list is opened into ("category:newsletter"), or
+        # None for the inbox itself.
+        self._open_bundle_key: str | None = None
         # Emails the server found for the query on screen, which local search
         # can't match when the words are only in the body. Bumping the
         # generation drops results still in flight for an older query.
@@ -271,6 +279,10 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             "notify::search-mode-enabled", self._on_search_mode_changed
         )
         self.unread_button.connect("toggled", self._on_unread_toggled)
+        self.bundle_back_button.connect("clicked", self._on_bundle_back)
+        self._inbox_view_handler = self._settings.connect(
+            "changed::inbox-view", lambda *_: self._refresh_conversations()
+        )
 
         # Load older mail when the list is scrolled to the bottom.
         self.conversation_scroller.connect("edge-reached", self._on_list_edge_reached)
@@ -337,7 +349,11 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # refresh: swapping in a new Gio.ListStore each time (the previous
         # approach) makes GtkListView treat it as a brand new list and reset
         # scroll to the top, which fights load-on-scroll.
-        self._conversation_store: Gio.ListStore = Gio.ListStore(item_type=Conversation)
+        # Conversations, plus the section headings and bundle rows the smart
+        # inbox puts between them -- so every reader checks the item's type.
+        self._conversation_store: Gio.ListStore = Gio.ListStore(
+            item_type=GObject.Object
+        )
         self._selection: Gtk.MultiSelection = Gtk.MultiSelection(
             model=self._conversation_store
         )
@@ -455,6 +471,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._settings.disconnect(self._interval_handler)
         self._settings.disconnect(self._avatar_handler)
         self._settings.disconnect(self._account_label_handler)
+        self._settings.disconnect(self._inbox_view_handler)
         self._avatars.shutdown()
         if self._sync_timer_id:
             GLib.source_remove(self._sync_timer_id)
@@ -478,6 +495,17 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._select_folder_by_id(folder_id)
 
         store = self._conversation_store
+        # Folded into a bundle, it has no row of its own: open the bundle.
+        for index in range(store.get_n_items()):
+            bundle = store.get_item(index)
+            if isinstance(bundle, smart_inbox.Bundle) and any(
+                mail.server_id == uid
+                for conversation in bundle.conversations
+                for mail in conversation.emails
+            ):
+                self._open_bundle(bundle.key)
+                break
+
         for index in range(store.get_n_items()):
             conversation = store.get_item(index)
             if not isinstance(conversation, Conversation):
@@ -516,6 +544,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._load_mail_view()
             return
         self._reload_folders()
+        # A bundle switch in the dialog changes the inbox without a new folder.
+        self._refresh_conversations()
         self._watch_accounts()
 
     def _on_add_account_clicked(self, *_args: object) -> None:
@@ -666,6 +696,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
+            ("toggle-priority", self._on_toggle_priority),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
             ("compose", self._on_compose_clicked),
@@ -680,6 +711,10 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         ):
             _register(self, name, handler)
         _register(self, "move", self._on_move, _MOVE_PARAM_TYPE)
+        _register(self, "set-category", self._on_set_category, "s")
+        # Stateful and bound to the setting, so the view menu's radio items
+        # show the current view and choosing one saves it.
+        self.add_action(self._settings.create_action("inbox-view"))
 
         # Flag actions are Ctrl-modified so they don't fire while typing in search.
         app = self.get_application()
@@ -687,6 +722,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             for name, accels in (
                 ("win.toggle-read", ["<ctrl>i"]),
                 ("win.toggle-star", ["<ctrl>s"]),
+                ("win.toggle-priority", ["<ctrl>p"]),
                 ("win.archive", ["<ctrl>e"]),
                 ("win.trash", ["<ctrl>Delete"]),
                 ("win.compose", ["<ctrl>n"]),
@@ -777,6 +813,39 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 self._db.set_email_starred,
                 imap_session.FLAG_FLAGGED,
             )
+
+    # Priority is the user's alone: never inferred, and kept on this machine,
+    # since no mail server has a flag that means it.
+    def _on_toggle_priority(self, _action: Gio.SimpleAction, _param: object) -> None:
+        conversations = self._selected_conversations()
+        if not conversations:
+            return
+        is_priority = not all(item.is_priority for item in conversations)
+        mails = [mail for conversation in conversations for mail in conversation.emails]
+        self._db.set_priority([mail.id for mail in mails], is_priority)
+        for mail in mails:
+            mail.is_priority = is_priority
+        self._after_flag_change(conversations)
+
+    # Files every mail from the selection's senders under a category, now and
+    # for whatever they send later -- the correction the rules learn from.
+    def _on_set_category(self, _action: Gio.SimpleAction, param: GLib.Variant) -> None:
+        category = param.get_string()
+        conversations = self._selected_conversations()
+        if category not in CATEGORIES or not conversations:
+            return
+        addresses = sorted(
+            {c.latest.sender_address for c in conversations if c.latest.sender_address}
+        )
+        for address in addresses:
+            self._db.set_sender_category(address, category)
+        if addresses:
+            self._toast(
+                _("Mail from {senders} now goes to {category}.").format(
+                    senders=", ".join(addresses), category=category_label(category)
+                )
+            )
+        self._refresh_conversations()
 
     def _toggle_read(self, conversations: list[Conversation]) -> None:
         self._toggle_flag(
@@ -1022,11 +1091,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
+            ("toggle-priority", self._on_toggle_priority),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
         ):
             _register(actions, name, handler)
         _register(actions, "move", self._on_move, _MOVE_PARAM_TYPE)
+        _register(actions, "set-category", self._on_set_category, "s")
         return actions
 
     def _context_menu(self, conversation: Conversation) -> Gio.Menu:
@@ -1041,9 +1112,26 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             else _("Mark Unread")
         )
         star = _("Unstar") if any(item.is_starred for item in selected) else _("Star")
+        priority = (
+            _("Remove Priority")
+            if all(item.is_priority for item in selected)
+            else _("Mark as Priority")
+        )
         flags.append(read, "context.toggle-read")
         flags.append(star, "context.toggle-star")
+        flags.append(priority, "context.toggle-priority")
         menu.append_section(None, flags)
+
+        categories = Gio.Menu()
+        for category in CATEGORIES:
+            item = Gio.MenuItem.new(category_label(category), None)
+            item.set_action_and_target_value(
+                "context.set-category", GLib.Variant.new_string(category)
+            )
+            categories.append_item(item)
+        sorting = Gio.Menu()
+        sorting.append_submenu(_("Always Sort Sender As"), categories)
+        menu.append_section(None, sorting)
 
         actions = Gio.Menu()
         actions.append(self._archive_label(), "context.archive")
@@ -1609,6 +1697,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             return
         previous = self._current_folder
         self._current_folder = folder
+        if previous is None or previous.id != folder.id:
+            self._open_bundle_key = None
         # All Inboxes belongs to no account, so Compose falls back to the first.
         self._account = self._accounts.get(folder.account_id) or next(
             iter(self._accounts.values()), None
@@ -1759,7 +1849,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         scroll_position = vadjustment.get_value() if vadjustment else 0.0
 
         matches = self._matching_conversations(keep_id)
-        self._replace_conversations(matches, keep_id)
+        self._replace_conversations(self._list_rows(matches), keep_id)
+        self._update_list_title()
         self._show_list_or_placeholder()
         self._update_reader()
         self._restore_scroll(vadjustment, scroll_position)
@@ -1781,8 +1872,91 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # on the next refresh when you move to another.
         return [item for item in matches if item.is_unread or item.id == keep_id]
 
+    def _is_inbox_view(self) -> bool:
+        folder = self._current_folder
+        return folder is not None and (
+            self._is_unified()
+            or mail_sync.folder_role(folder) is mail_sync.FolderRole.INBOX
+        )
+
+    def _account_id_of(self, conversation: Conversation) -> int | None:
+        origin = self._origin(conversation.latest)
+        return origin[0].id if origin else None
+
+    def _account_label_for(self, account_id: int) -> str:
+        account = self._accounts.get(account_id)
+        return self._account_label(account) if account is not None else ""
+
+    def _list_rows(self, conversations: list[Conversation]) -> list[GObject.Object]:
+        """The smart inbox's rows for an inbox; date sections anywhere else.
+
+        A search shows plain dated results: a match folded into a bundle would
+        be a match the user can't see.
+        """
+        today = date.today()
+        if self.search_entry.get_text().strip() or not self._is_inbox_view():
+            self._open_bundle_key = None
+            return smart_inbox.build(
+                conversations, smart_inbox.VIEW_DATE, self._account_id_of, set(), today
+            )
+        # Bundling an account only means something beside other accounts.
+        bundled = (
+            {account.id for account in self._accounts.values() if account.is_bundled}
+            if self._is_unified()
+            else set()
+        )
+        if self._open_bundle_key is not None:
+            return smart_inbox.open_bundle(
+                conversations,
+                self._open_bundle_key,
+                self._account_id_of,
+                bundled,
+                today,
+            )
+        view = self._settings.get_string("inbox-view")
+        return smart_inbox.build(
+            conversations, view, self._account_id_of, bundled, today
+        )
+
+    def _update_list_title(self) -> None:
+        folder = self._current_folder
+        is_inbox = self._is_inbox_view()
+        is_bundle_open = self._open_bundle_key is not None and is_inbox
+        self.bundle_back_button.set_visible(is_bundle_open)
+        self.inbox_view_button.set_sensitive(is_inbox and not is_bundle_open)
+        if folder is None:
+            return
+        if is_bundle_open and self._open_bundle_key is not None:
+            self.inbox_title.set_title(
+                bundle_label(self._open_bundle_key, self._account_label_for)
+            )
+            self.inbox_title.set_subtitle(mail_sync.folder_label(folder))
+            return
+        self.inbox_title.set_title(mail_sync.folder_label(folder))
+        subtitles = {
+            smart_inbox.VIEW_IMPORTANCE: _("By Importance"),
+            smart_inbox.VIEW_CATEGORY: _("By Category"),
+            smart_inbox.VIEW_DATE: _("By Date"),
+        }
+        self.inbox_title.set_subtitle(
+            subtitles.get(self._settings.get_string("inbox-view"), "")
+            if is_inbox
+            else ""
+        )
+
+    def _open_bundle(self, key: str) -> None:
+        self._open_bundle_key = key
+        self._refresh_conversations()
+        vadjustment = self.conversation_scroller.get_vadjustment()
+        if vadjustment is not None:
+            vadjustment.set_value(0)
+
+    def _on_bundle_back(self, _button: Gtk.Button) -> None:
+        self._open_bundle_key = None
+        self._refresh_conversations()
+
     def _replace_conversations(
-        self, matches: list[Conversation], keep_id: int | None
+        self, matches: list[GObject.Object], keep_id: int | None
     ) -> None:
         """Swap in the new list, keeping keep_id selected if it survived.
 
@@ -1794,7 +1968,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         target = -1
         if keep_id is not None:
             target = next(
-                (i for i, item in enumerate(matches) if item.id == keep_id), -1
+                (
+                    i
+                    for i, item in enumerate(matches)
+                    if isinstance(item, Conversation) and item.id == keep_id
+                ),
+                -1,
             )
 
         store = self._conversation_store
@@ -1979,22 +2158,35 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # reusable row), so it's fine to allocate here. A right-click gesture
         # opens the actions menu for that row.
         def on_setup(_factory: Gtk.SignalListItemFactory, item: Gtk.ListItem) -> None:
-            row = ConversationRow(self._avatars)
+            row = InboxItemRow(self._avatars)
             gesture = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
             gesture.connect("pressed", self._on_row_right_click, item)
-            row.add_controller(gesture)
+            row.conversation.add_controller(gesture)
+            # A bundle isn't selectable, so opening it is a plain click.
+            opener = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+            opener.connect("released", self._on_bundle_clicked, item)
+            row.bundle.add_controller(opener)
             item.set_child(row)
 
         # bind: fill an existing widget from its item. Runs often (every
         # scroll), so keep it cheap — just copy fields across.
         def on_bind(_factory: Gtk.SignalListItemFactory, item: Gtk.ListItem) -> None:
             row = item.get_child()
-            conversation = item.get_item()
-            assert isinstance(row, ConversationRow)
-            assert isinstance(conversation, Conversation)
-            account, folder = self._origin(conversation.latest) or (None, None)
-            row.bind(
-                conversation,
+            entry = item.get_item()
+            assert isinstance(row, InboxItemRow)
+            is_conversation = isinstance(entry, Conversation)
+            item.set_selectable(is_conversation)
+            item.set_activatable(is_conversation)
+            if isinstance(entry, smart_inbox.InboxSection):
+                row.show_section(entry, self._account_label_for)
+                return
+            if isinstance(entry, smart_inbox.Bundle):
+                row.show_bundle(entry, self._account_label_for)
+                return
+            assert isinstance(entry, Conversation)
+            account, folder = self._origin(entry.latest) or (None, None)
+            row.show_conversation(
+                entry,
                 is_outgoing=folder is not None and mail_sync.is_outgoing(folder),
                 account_label=account.short_label
                 if account is not None and self._is_unified()
@@ -2004,6 +2196,18 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         factory.connect("setup", on_setup)
         factory.connect("bind", on_bind)
         return factory
+
+    def _on_bundle_clicked(
+        self,
+        _gesture: Gtk.GestureClick,
+        n_press: int,
+        _x: float,
+        _y: float,
+        item: Gtk.ListItem,
+    ) -> None:
+        entry = item.get_item()
+        if n_press == 1 and isinstance(entry, smart_inbox.Bundle):
+            self._open_bundle(entry.key)
 
     def _on_search_action(self, _action: Gio.SimpleAction, _param: object) -> None:
         self.search_bar.set_search_mode(not self.search_bar.get_search_mode())
@@ -2075,6 +2279,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         else:
             self.star_button.set_icon_name("non-starred-symbolic")
             self.star_button.set_tooltip_text(_("Star"))
+
+        if all(conversation.is_priority for conversation in selected):
+            self.priority_button.set_tooltip_text(_("Remove Priority"))
+            self.priority_button.add_css_class("accent")
+        else:
+            self.priority_button.set_tooltip_text(_("Mark as Priority"))
+            self.priority_button.remove_css_class("accent")
 
     # Empty the reading pane, releasing each view's WebView as it goes.
     def _clear_thread(self) -> None:

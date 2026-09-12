@@ -44,3 +44,26 @@
 .message-html {
   background-color: #ffffff;
 }
+
+/* Smart inbox. The headings sit between rows like Spark's, set small and dim
+   so the mail stays what the eye lands on. */
+.inbox-section {
+  font-size: 0.85em;
+  font-weight: bold;
+  opacity: 0.65;
+  margin: 12px 12px 2px 12px;
+}
+
+.bundle-senders {
+  font-size: 0.9em;
+}
+
+/* A priority thread is marked where it sits, in every view and folder. */
+.conversation-row.priority {
+  background-color: alpha(@warning_color, 0.10);
+  border-radius: 10px;
+}
+
+.priority-mark {
+  color: @warning_color;
+}
