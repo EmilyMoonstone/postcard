@@ -503,6 +503,23 @@ class Database:
         ).fetchall()
         return self._conversations_from_rows(rows, is_multi_folder=len(folder_ids) > 1)
 
+    def starred_conversations(self, folder_ids: Sequence[int]) -> list[Conversation]:
+        """Every thread in these folders with a starred message, whole."""
+        if not folder_ids:
+            return []
+        places = ",".join("?" * len(folder_ids))
+        rows = self._conn.execute(
+            f"""
+            SELECT {_EMAIL_COLUMNS} FROM emails
+            WHERE folder_id IN ({places}) AND COALESCE(conversation_id, id) IN (
+                SELECT COALESCE(conversation_id, id) FROM emails
+                WHERE folder_id IN ({places}) AND starred = 1
+            )
+            """,
+            (*folder_ids, *folder_ids),
+        ).fetchall()
+        return self._conversations_from_rows(rows, is_multi_folder=True)
+
     def search_conversations(
         self,
         folder_ids: Sequence[int],

@@ -840,3 +840,17 @@ def test_an_account_can_be_bundled(db, folder):
     db.set_account_bundled(folder.account_id, True)
 
     assert db.accounts()[0].is_bundled is True
+
+
+def test_starred_conversations_come_whole_from_every_folder_given(db, folder):
+    archive = db.get_or_create_folder(folder.account_id, "Archive")
+    incoming(db, folder.id, "1", subject="Starred", is_starred=True)
+    incoming(db, archive.id, "2", subject="Also starred", is_starred=True)
+    incoming(db, folder.id, "3", subject="Plain")
+
+    subjects = sorted(
+        c.subject for c in db.starred_conversations([folder.id, archive.id])
+    )
+
+    assert subjects == ["Also starred", "Starred"]
+    assert db.starred_conversations([]) == []

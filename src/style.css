@@ -67,3 +67,9 @@
 .priority-mark {
   color: @warning_color;
 }
+
+.sidebar-heading {
+  font-size: 0.85em;
+  font-weight: bold;
+  opacity: 0.65;
+}

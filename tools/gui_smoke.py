@@ -98,6 +98,10 @@ def seed_accounts(path: Path) -> None:
     inbox = db.get_or_create_folder(imap.id, "INBOX", "mail-unread-symbolic")
     db.get_or_create_folder(imap.id, "Archive", "mail-archive-symbolic")
     db.get_or_create_folder(imap.id, "Trash", "user-trash-symbolic")
+    projects = db.get_or_create_folder(imap.id, "Projects")
+    db.set_folder_parent(
+        db.get_or_create_folder(imap.id, "Projects/2026").id, projects.id, "/"
+    )
     graph_inbox = db.get_or_create_folder(graph.id, "AAMkInbox")
     db.set_folder_identity(graph_inbox.id, "inbox", "Posteingang")
     db.set_account_bundled(graph.id, True)
@@ -198,6 +202,18 @@ def poke_accounts(app: PostcardApplication) -> list[Callable[[], object]]:
         open_first_bundle,
         select_first,
         lambda: window_of(app)._on_bundle_back(None),
+        lambda: window_of(app)._select_folder_by_id(-2),
+        lambda: window_of(app)._select_folder_by_id(-6),
+        lambda: window_of(app)._show_more_folders(window_of(app).folder_list),
+        lambda: window_of(app)._show_other_folder(
+            next(
+                f
+                for f in window_of(app)._folders_by_id.values()
+                if f.name == "Projects/2026"
+            )
+        ),
+        lambda: app.settings.set_boolean("show-account-display-name", True),
+        lambda: window_of(app)._select_folder_by_id(-1),
         lambda: app.settings.set_string("inbox-view", "category"),
         lambda: app.settings.set_string("inbox-view", "date"),
         lambda: app.settings.set_string("inbox-view", "importance"),

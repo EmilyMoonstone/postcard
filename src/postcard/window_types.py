@@ -35,8 +35,15 @@ FOLDER_SYNC_COOLDOWN_SECONDS = 60
 
 SECONDS_PER_MINUTE = 60
 
-# Negative so it can never collide with a SQLite rowid.
+# The sidebar's folders that gather one role across every account. Negative so
+# they can never collide with a SQLite rowid.
 ALL_INBOXES_ID = -1
+STARRED_ID = -2
+ALL_DRAFTS_ID = -3
+ALL_SENT_ID = -4
+ALL_TRASH_ID = -5
+ALL_ARCHIVE_ID = -6
+ALL_JUNK_ID = -7
 
 # Gtk.Stack child names, matching the ids in main-window.blp.
 PAGE_MAIL = "mail"
