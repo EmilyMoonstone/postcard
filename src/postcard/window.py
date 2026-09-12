@@ -4,7 +4,7 @@ import shutil
 import threading
 import time
 from collections.abc import Callable, Iterator
-from datetime import datetime
+from datetime import date, datetime
 from email import policy
 from email.utils import parseaddr
 from functools import partial
@@ -21,8 +21,8 @@ from .account_dialog import PostcardAccountDialog
 from .accounts_dialog import PostcardAccountsDialog
 from .avatar_loader import AvatarLoader
 from .composer_window import PostcardComposerWindow, composer_for_mailto
-from .conversation_row import ConversationRow
-from .core import compose, secrets
+from .core import compose, secrets, smart_inbox
+from .core.categories import CATEGORIES
 from .core.mime.invitation import Invitation
 from .core.mime.invitation import build_reply as build_invitation_reply
 from .core.mime.message_parser import ParsedMessage, Unsubscribe
@@ -34,12 +34,18 @@ from .core.models.folder import Folder
 from .core.models.pending_action import ACTION_FLAG, ACTION_MOVE, PendingAction
 from .core.net import errors, imap_session
 from .core.store.database import Database
-from .folder_row import FolderRow
+from .folder_row import FolderRow, SidebarHeading, SidebarMore
+from .inbox_rows import InboxItemRow, bundle_label, category_label
 from .mail_watch import MailWatcher
 from .message_view import LoadCallback, MessageView
 from .online_accounts_dialog import PostcardOnlineAccountsDialog
 from .window_types import (
+    ALL_ARCHIVE_ID,
+    ALL_DRAFTS_ID,
     ALL_INBOXES_ID,
+    ALL_JUNK_ID,
+    ALL_SENT_ID,
+    ALL_TRASH_ID,
     FOLDER_SYNC_COOLDOWN_SECONDS,
     MAIL_ACTIONS,
     MOVE_UNDO_MS,
@@ -52,6 +58,7 @@ from .window_types import (
     SEARCH_DEBOUNCE_MS,
     SECONDS_PER_MINUTE,
     SETTING_SYNC_INTERVAL,
+    STARRED_ID,
     BodyRequest,
     FlagChange,
     OutboxResult,
@@ -125,6 +132,10 @@ class PostcardMainWindow(Adw.ApplicationWindow):
     search_bar: Gtk.SearchBar = Gtk.Template.Child()
     search_entry: Gtk.SearchEntry = Gtk.Template.Child()
     unread_button: Gtk.ToggleButton = Gtk.Template.Child()
+    bundle_back_button: Gtk.Button = Gtk.Template.Child()
+    inbox_view_button: Gtk.MenuButton = Gtk.Template.Child()
+    inbox_title: Adw.WindowTitle = Gtk.Template.Child()
+    priority_button: Gtk.Button = Gtk.Template.Child()
     compose_button: Gtk.Button = Gtk.Template.Child()
     reply_all_button: Gtk.Button = Gtk.Template.Child()
     reply_button: Gtk.Button = Gtk.Template.Child()
@@ -182,6 +193,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._current_folder: Folder | None = None
         self._active_view: MessageView | None = None
         self._search_timeout: int = 0
+        # The bundle row the list is opened into ("category:newsletter"), or
+        # None for the inbox itself.
+        self._open_bundle_key: str | None = None
         # Emails the server found for the query on screen, which local search
         # can't match when the words are only in the body. Bumping the
         # generation drops results still in flight for an older query.
@@ -271,6 +285,10 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             "notify::search-mode-enabled", self._on_search_mode_changed
         )
         self.unread_button.connect("toggled", self._on_unread_toggled)
+        self.bundle_back_button.connect("clicked", self._on_bundle_back)
+        self._inbox_view_handler = self._settings.connect(
+            "changed::inbox-view", lambda *_: self._refresh_conversations()
+        )
 
         # Load older mail when the list is scrolled to the bottom.
         self.conversation_scroller.connect("edge-reached", self._on_list_edge_reached)
@@ -299,37 +317,55 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # Boxes of the rows currently on screen, keyed by folder id, so
         # _reload_folders can refresh them without rebuilding the tree.
         self._folder_rows: dict[int, FolderRow] = {}
-        # The same, for the account headings, so their sync spinners can start
-        # and stop on their own.
+        # What each bound row was given beyond its folder: the account label it
+        # shows under a group, and whether it is that account's inbox row.
+        self._folder_row_labels: dict[int, tuple[str | None, bool]] = {}
+        # Each account's inbox row, so its sync spinner can start and stop.
         self._account_rows: dict[int, FolderRow] = {}
-        # The account ids and (id, parent_id) folder pairs the tree was last
-        # built from.
-        self._folder_shape: tuple[list[int], list[tuple[int, int | None]]] = ([], [])
-        # Top-level folders per account id, and child folders per parent id.
-        self._account_roots: dict[int, list[Folder]] = {}
+        # The account ids and (id, parent_id, role) of the folders the tree was
+        # last built from.
+        self._folder_shape: tuple[
+            list[int], list[tuple[int, int | None, mail_sync.FolderRole]]
+        ] = ([], [])
+        # Child folders per parent id.
         self._folder_children: dict[int, list[Folder]] = {}
 
-        # Built once, and never a database row: the sidebar keeps selecting
-        # this object, and _is_unified compares against it by identity.
-        self._all_inboxes_row: Folder = Folder(
-            id=ALL_INBOXES_ID,
-            account_id=0,
-            name=_("All Inboxes"),
-            icon_name="mail-unread-symbolic",
-        )
+        # The sidebar's cross-account groups. Built once and never database
+        # rows: the sidebar keeps selecting these objects by id.
+        self._virtual_folders: dict[int, Folder] = {
+            group_id: Folder(
+                id=group_id,
+                account_id=0,
+                name=f"group:{group_id}",
+                icon_name=icon,
+                role=role,
+                label=label,
+            )
+            for group_id, role, icon, label in (
+                (ALL_INBOXES_ID, "inbox", "mail-unread-symbolic", _("Inbox")),
+                (STARRED_ID, "starred", "starred-symbolic", _("Starred")),
+                (ALL_DRAFTS_ID, "drafts", "document-edit-symbolic", _("Drafts")),
+                (ALL_SENT_ID, "sent", "mail-send-symbolic", _("Sent")),
+                (ALL_TRASH_ID, "trash", "user-trash-symbolic", _("Trash")),
+                (ALL_ARCHIVE_ID, "archive", "mail-archive-symbolic", _("Archive")),
+                (ALL_JUNK_ID, "junk", "mail-mark-junk-symbolic", _("Spam")),
+            )
+        }
 
-        # Accounts and the All Inboxes row share the top level of the tree.
         self._folder_root_store: Gio.ListStore = Gio.ListStore(item_type=GObject.Object)
+        # Not autoexpanding: Spark opens only Inbox, which _rebuild_folder_tree
+        # expands itself.
         self._folder_tree_model: Gtk.TreeListModel = Gtk.TreeListModel.new(
             self._folder_root_store,
             False,
-            True,
+            False,
             self._folder_children_func,
             None,
             None,
         )
+        # No autoselect: a folder opened from "More" leaves no row selected.
         self._folder_selection: Gtk.SingleSelection = Gtk.SingleSelection(
-            model=self._folder_tree_model
+            model=self._folder_tree_model, autoselect=False, can_unselect=True
         )
         self._folder_selection.connect("selection-changed", self._on_folder_selected)
 
@@ -337,7 +373,11 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # refresh: swapping in a new Gio.ListStore each time (the previous
         # approach) makes GtkListView treat it as a brand new list and reset
         # scroll to the top, which fights load-on-scroll.
-        self._conversation_store: Gio.ListStore = Gio.ListStore(item_type=Conversation)
+        # Conversations, plus the section headings and bundle rows the smart
+        # inbox puts between them -- so every reader checks the item's type.
+        self._conversation_store: Gio.ListStore = Gio.ListStore(
+            item_type=GObject.Object
+        )
         self._selection: Gtk.MultiSelection = Gtk.MultiSelection(
             model=self._conversation_store
         )
@@ -455,6 +495,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._settings.disconnect(self._interval_handler)
         self._settings.disconnect(self._avatar_handler)
         self._settings.disconnect(self._account_label_handler)
+        self._settings.disconnect(self._inbox_view_handler)
         self._avatars.shutdown()
         if self._sync_timer_id:
             GLib.source_remove(self._sync_timer_id)
@@ -478,6 +519,17 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._select_folder_by_id(folder_id)
 
         store = self._conversation_store
+        # Folded into a bundle, it has no row of its own: open the bundle.
+        for index in range(store.get_n_items()):
+            bundle = store.get_item(index)
+            if isinstance(bundle, smart_inbox.Bundle) and any(
+                mail.server_id == uid
+                for conversation in bundle.conversations
+                for mail in conversation.emails
+            ):
+                self._open_bundle(bundle.key)
+                break
+
         for index in range(store.get_n_items()):
             conversation = store.get_item(index)
             if not isinstance(conversation, Conversation):
@@ -516,6 +568,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             self._load_mail_view()
             return
         self._reload_folders()
+        # A bundle switch in the dialog changes the inbox without a new folder.
+        self._refresh_conversations()
         self._watch_accounts()
 
     def _on_add_account_clicked(self, *_args: object) -> None:
@@ -666,6 +720,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
+            ("toggle-priority", self._on_toggle_priority),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
             ("compose", self._on_compose_clicked),
@@ -680,6 +735,10 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         ):
             _register(self, name, handler)
         _register(self, "move", self._on_move, _MOVE_PARAM_TYPE)
+        _register(self, "set-category", self._on_set_category, "s")
+        # Stateful and bound to the setting, so the view menu's radio items
+        # show the current view and choosing one saves it.
+        self.add_action(self._settings.create_action("inbox-view"))
 
         # Flag actions are Ctrl-modified so they don't fire while typing in search.
         app = self.get_application()
@@ -687,6 +746,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             for name, accels in (
                 ("win.toggle-read", ["<ctrl>i"]),
                 ("win.toggle-star", ["<ctrl>s"]),
+                ("win.toggle-priority", ["<ctrl>p"]),
                 ("win.archive", ["<ctrl>e"]),
                 ("win.trash", ["<ctrl>Delete"]),
                 ("win.compose", ["<ctrl>n"]),
@@ -777,6 +837,39 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 self._db.set_email_starred,
                 imap_session.FLAG_FLAGGED,
             )
+
+    # Priority is the user's alone: never inferred, and kept on this machine,
+    # since no mail server has a flag that means it.
+    def _on_toggle_priority(self, _action: Gio.SimpleAction, _param: object) -> None:
+        conversations = self._selected_conversations()
+        if not conversations:
+            return
+        is_priority = not all(item.is_priority for item in conversations)
+        mails = [mail for conversation in conversations for mail in conversation.emails]
+        self._db.set_priority([mail.id for mail in mails], is_priority)
+        for mail in mails:
+            mail.is_priority = is_priority
+        self._after_flag_change(conversations)
+
+    # Files every mail from the selection's senders under a category, now and
+    # for whatever they send later -- the correction the rules learn from.
+    def _on_set_category(self, _action: Gio.SimpleAction, param: GLib.Variant) -> None:
+        category = param.get_string()
+        conversations = self._selected_conversations()
+        if category not in CATEGORIES or not conversations:
+            return
+        addresses = sorted(
+            {c.latest.sender_address for c in conversations if c.latest.sender_address}
+        )
+        for address in addresses:
+            self._db.set_sender_category(address, category)
+        if addresses:
+            self._toast(
+                _("Mail from {senders} now goes to {category}.").format(
+                    senders=", ".join(addresses), category=category_label(category)
+                )
+            )
+        self._refresh_conversations()
 
     def _toggle_read(self, conversations: list[Conversation]) -> None:
         self._toggle_flag(
@@ -1022,11 +1115,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         for name, handler in (
             ("toggle-read", self._on_toggle_read),
             ("toggle-star", self._on_toggle_star),
+            ("toggle-priority", self._on_toggle_priority),
             ("archive", self._on_archive),
             ("trash", self._on_trash),
         ):
             _register(actions, name, handler)
         _register(actions, "move", self._on_move, _MOVE_PARAM_TYPE)
+        _register(actions, "set-category", self._on_set_category, "s")
         return actions
 
     def _context_menu(self, conversation: Conversation) -> Gio.Menu:
@@ -1041,9 +1136,26 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             else _("Mark Unread")
         )
         star = _("Unstar") if any(item.is_starred for item in selected) else _("Star")
+        priority = (
+            _("Remove Priority")
+            if all(item.is_priority for item in selected)
+            else _("Mark as Priority")
+        )
         flags.append(read, "context.toggle-read")
         flags.append(star, "context.toggle-star")
+        flags.append(priority, "context.toggle-priority")
         menu.append_section(None, flags)
+
+        categories = Gio.Menu()
+        for category in CATEGORIES:
+            item = Gio.MenuItem.new(category_label(category), None)
+            item.set_action_and_target_value(
+                "context.set-category", GLib.Variant.new_string(category)
+            )
+            categories.append_item(item)
+        sorting = Gio.Menu()
+        sorting.append_submenu(_("Always Sort Sender As"), categories)
+        menu.append_section(None, sorting)
 
         actions = Gio.Menu()
         actions.append(self._archive_label(), "context.archive")
@@ -1439,22 +1551,75 @@ class PostcardMainWindow(Adw.ApplicationWindow):
 
     # --- the folder sidebar -----------------------------------------------
 
-    # Two kinds of branch: an account row holds its top-level mailboxes, a
-    # folder row holds its subfolders.
+    # Three kinds of branch: a group row ("Sent") holds each account's folder
+    # of that role, and a folder holds its subfolders -- the ones with no role
+    # of their own, since those already sit under their group.
     def _folder_children_func(
         self, item: GObject.Object, *_args: object
     ) -> Gio.ListStore | None:
-        if isinstance(item, Account):
-            children = self._account_roots.get(item.id)
+        if not isinstance(item, Folder):
+            return None
+        if item.id < 0:
+            children = self._group_members(item)
         else:
-            assert isinstance(item, Folder)
-            children = self._folder_children.get(item.id)
+            children = [
+                child
+                for child in self._folder_children.get(item.id, [])
+                if mail_sync.folder_role(child) is mail_sync.FolderRole.OTHER
+            ]
         if not children:
             return None
         store = Gio.ListStore(item_type=Folder)
         for child in children:
             store.append(child)
         return store
+
+    def _group_members(self, group: Folder) -> list[Folder]:
+        """Every account's folder of a group's role, in account order.
+
+        Starred gathers messages, not folders, so it has none. A role folder
+        nested inside another of the same role shows under its parent instead.
+        """
+        if group.id == STARRED_ID:
+            return []
+        role = mail_sync.folder_role(group)
+        members = [
+            folder
+            for folder in self._folders_by_id.values()
+            if mail_sync.folder_role(folder) is role
+        ]
+        member_ids = {folder.id for folder in members}
+        account_order = list(self._accounts)
+        return sorted(
+            (folder for folder in members if folder.parent_id not in member_ids),
+            key=lambda folder: (
+                account_order.index(folder.account_id)
+                if folder.account_id in account_order
+                else len(account_order)
+            ),
+        )
+
+    def _more_folders(self) -> list[tuple[Account, list[tuple[Folder, int]]]]:
+        """The folders no group shows, per account, each with its depth."""
+        result = []
+        for account in self._accounts.values():
+            folders = [
+                folder
+                for folder in self._folders_by_id.values()
+                if folder.account_id == account.id
+                and mail_sync.folder_role(folder)
+                in (mail_sync.FolderRole.OTHER, mail_sync.FolderRole.STARRED)
+            ]
+            if folders:
+                result.append((account, [(f, self._depth(f)) for f in folders]))
+        return result
+
+    def _depth(self, folder: Folder) -> int:
+        depth, parent_id = 0, folder.parent_id
+        while parent_id is not None and parent_id in self._folders_by_id:
+            depth += 1
+            parent_id = self._folders_by_id[parent_id].parent_id
+        return depth
 
     def _setup_folder_sidebar(self) -> None:
         self.folder_list.set_model(self._folder_selection)
@@ -1470,7 +1635,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self, _factory: Gtk.SignalListItemFactory, item: Gtk.ListItem
     ) -> None:
         expander = Gtk.TreeExpander()
-        expander.set_child(FolderRow())
+        row = FolderRow()
+        # "More" isn't a folder to select, so a click opens its popover.
+        click = Gtk.GestureClick()
+        click.connect("released", self._on_sidebar_row_clicked, item)
+        row.add_controller(click)
+        expander.set_child(row)
         item.set_child(expander)
 
     # bind: fill an existing widget from its item. Runs on every scroll, so it
@@ -1489,17 +1659,93 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         assert isinstance(row, FolderRow)
 
         entry = tree_list_row.get_item()
-        # An account row is a heading over its folders, not somewhere to click.
         item.set_selectable(isinstance(entry, Folder))
-        if isinstance(entry, Account):
-            self._account_rows[entry.id] = row
-            is_syncing = entry.id in self._syncing_account_ids
-            row.bind_account(self._account_label(entry), tree_list_row, is_syncing)
+        if isinstance(entry, SidebarHeading):
+            row.bind_heading(entry.label)
+            return
+        if isinstance(entry, SidebarMore):
+            row.bind_more(_("More"))
             return
 
         assert isinstance(entry, Folder)
+        parent = tree_list_row.get_parent()
+        group = parent.get_item() if parent is not None else None
+        label = None
+        is_account_inbox = False
+        if isinstance(group, Folder) and group.id < 0:
+            # Under a group, a folder is told apart by its account.
+            account = self._accounts.get(entry.account_id)
+            label = self._account_label(account) if account is not None else None
+            is_account_inbox = group.id == ALL_INBOXES_ID
         self._folder_rows[entry.id] = row
-        row.bind(entry, self._unread_badge(entry))
+        self._folder_row_labels[entry.id] = (label, is_account_inbox)
+        row.bind(entry, self._unread_badge(entry), label, is_account_inbox)
+        if is_account_inbox:
+            self._account_rows[entry.account_id] = row
+            row.set_syncing(entry.account_id in self._syncing_account_ids)
+
+    def _on_sidebar_row_clicked(
+        self,
+        gesture: Gtk.GestureClick,
+        n_press: int,
+        _x: float,
+        _y: float,
+        item: Gtk.ListItem,
+    ) -> None:
+        tree_list_row = item.get_item()
+        if n_press != 1 or not isinstance(tree_list_row, Gtk.TreeListRow):
+            return
+        if isinstance(tree_list_row.get_item(), SidebarMore):
+            widget = gesture.get_widget()
+            if widget is not None:
+                self._show_more_folders(widget)
+
+    def _show_more_folders(self, anchor: Gtk.Widget) -> None:
+        """A popover of every folder the groups leave out, per account."""
+        listbox = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        listbox.add_css_class("navigation-sidebar")
+        for account, folders in self._more_folders():
+            heading = Gtk.ListBoxRow(activatable=False, selectable=False)
+            title = Gtk.Label(label=self._account_label(account), xalign=0)
+            title.add_css_class("sidebar-heading")
+            title.set_margin_top(6)
+            heading.set_child(title)
+            listbox.append(heading)
+            for folder, depth in folders:
+                folder_row = FolderRow()
+                folder_row.bind(folder, self._unread_badge(folder))
+                folder_row.set_margin_start(6 + 18 * depth)
+                entry = Gtk.ListBoxRow(child=folder_row)
+                entry.folder = folder  # type: ignore[attr-defined]
+                listbox.append(entry)
+
+        scroller = Gtk.ScrolledWindow(
+            child=listbox,
+            hscrollbar_policy=Gtk.PolicyType.NEVER,
+            propagate_natural_height=True,
+            max_content_height=560,
+            min_content_width=260,
+        )
+        popover = Gtk.Popover(child=scroller, position=Gtk.PositionType.RIGHT)
+        popover.set_parent(anchor)
+        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
+
+        def on_activated(_listbox: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
+            folder = getattr(row, "folder", None)
+            popover.popdown()
+            if isinstance(folder, Folder):
+                self._show_other_folder(folder)
+
+        listbox.connect("row-activated", on_activated)
+        popover.popup()
+
+    # A folder from "More" has no row to select; the sidebar lets go of its
+    # selection so it doesn't claim a folder that isn't the one on screen.
+    def _show_other_folder(self, folder: Folder) -> None:
+        self._suppress_folder_refresh = True
+        self._folder_selection.set_selected(Gtk.INVALID_LIST_POSITION)
+        self._suppress_folder_refresh = False
+        self._show_folder(folder)
 
     def _account_label(self, account: Account) -> str:
         if not self._settings.get_boolean(SETTING_ACCOUNT_DISPLAY_NAME):
@@ -1507,11 +1753,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         return account.display_name.strip() or account.email
 
     def _relabel_accounts(self) -> None:
-        # Only the rows on screen; the rest pick the new label up when bound.
-        for account_id, row in self._account_rows.items():
-            account = self._accounts.get(account_id)
-            if account is not None:
-                row.set_account_label(self._account_label(account))
+        if self._accounts:
+            self._rebuild_folder_tree()
 
     def _inbox_folders(self) -> list[Folder]:
         return [
@@ -1521,12 +1764,26 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         ]
 
     def _view_folders(self) -> list[Folder]:
-        if self._is_unified():
-            return self._inbox_folders()
-        return [] if self._current_folder is None else [self._current_folder]
+        folder = self._current_folder
+        if folder is None or folder.id == STARRED_ID:
+            return []
+        if folder.id < 0:
+            role = mail_sync.folder_role(folder)
+            return [
+                member
+                for member in self._folders_by_id.values()
+                if mail_sync.folder_role(member) is role
+            ]
+        return [folder]
 
+    # Any of the sidebar's cross-account groups, not only All Inboxes.
     def _is_unified(self) -> bool:
-        return self._current_folder is self._all_inboxes_row
+        return self._current_folder is not None and self._current_folder.id < 0
+
+    def _is_starred_view(self) -> bool:
+        return (
+            self._current_folder is not None and self._current_folder.id == STARRED_ID
+        )
 
     def _unread_badge(self, folder: Folder) -> int:
         """What the sidebar shows next to a folder.
@@ -1536,8 +1793,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         folder shows what the server last reported, since local rows there are
         whatever an earlier visit happened to leave behind.
         """
-        if folder.id == ALL_INBOXES_ID:
-            return sum(self._unread_badge(inbox) for inbox in self._inbox_folders())
+        if folder.id == STARRED_ID:
+            return 0
+        if folder.id < 0:
+            return sum(
+                self._unread_badge(member) for member in self._group_members(folder)
+            )
         if any(shown.id == folder.id for shown in self._view_folders()):
             return self._db.unread_count_in_folder(folder.id)
         remote = self._remote_unread_counts.get(folder.id)
@@ -1552,39 +1813,35 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         if isinstance(tree_list_row, Gtk.TreeListRow):
             entry = tree_list_row.get_item()
             if isinstance(entry, Folder):
-                self._folder_rows.pop(entry.id, None)
-            elif isinstance(entry, Account):
-                self._account_rows.pop(entry.id, None)
+                row = self._folder_rows.pop(entry.id, None)
+                self._folder_row_labels.pop(entry.id, None)
+                if self._account_rows.get(entry.account_id) is row:
+                    self._account_rows.pop(entry.account_id, None)
 
         expander = item.get_child()
         if isinstance(expander, Gtk.TreeExpander):
             expander.set_list_row(None)
 
-    # Select All Inboxes, else the first account's inbox, else its first folder.
     def _select_inbox_row(self) -> None:
-        target = -1
-        for position, folder in self._folder_positions():
-            if target < 0:
-                target = position
-            if (
-                folder.id == ALL_INBOXES_ID
-                or mail_sync.folder_role(folder) == mail_sync.FolderRole.INBOX
-            ):
-                target = position
-                break
-        if target < 0:
+        position = next(
+            (
+                p
+                for p, folder in self._folder_positions()
+                if folder.id == ALL_INBOXES_ID
+            ),
+            -1,
+        )
+        if position < 0:
             return
-
-        # Row 0 is autoselected when the tree is built, so set_selected() may
-        # emit nothing. Load the folder directly instead.
         self._suppress_folder_refresh = True
-        self._folder_selection.set_selected(target)
+        self._folder_selection.set_selected(position)
         self._suppress_folder_refresh = False
         self._current_folder = None
-        self._on_folder_selected(self._folder_selection, target, 1)
+        self._on_folder_selected(self._folder_selection, position, 1)
 
-    # Every folder row in the flattened tree, with its position. Account rows
-    # sit in the same model, so they are skipped here rather than at each caller.
+    # Every folder row in the flattened tree, with its position. Headings and
+    # "More" sit in the same model, so they are skipped here rather than at
+    # each caller.
     def _folder_positions(self) -> Iterator[tuple[int, Folder]]:
         for position in range(self._folder_tree_model.get_n_items()):
             tree_row = self._folder_tree_model.get_item(position)
@@ -1602,14 +1859,16 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         tree_list_row = selection.get_selected_item()
         if not isinstance(tree_list_row, Gtk.TreeListRow):
             return
-
         folder = tree_list_row.get_item()
-        # Account headings sit in the same model and aren't somewhere to click.
-        if not isinstance(folder, Folder):
-            return
+        if isinstance(folder, Folder):
+            self._show_folder(folder)
+
+    def _show_folder(self, folder: Folder) -> None:
         previous = self._current_folder
         self._current_folder = folder
-        # All Inboxes belongs to no account, so Compose falls back to the first.
+        if previous is None or previous.id != folder.id:
+            self._open_bundle_key = None
+        # A group belongs to no account, so Compose falls back to the first.
         self._account = self._accounts.get(folder.account_id) or next(
             iter(self._accounts.values()), None
         )
@@ -1640,8 +1899,8 @@ class PostcardMainWindow(Adw.ApplicationWindow):
 
     # Rebuilding the tree destroys every row, which resets the user's
     # expand/collapse state, so only rebuild when the accounts, the folders or
-    # their nesting actually changed. A plain badge/icon update refreshes the
-    # rows in place.
+    # their roles and nesting actually changed. A plain badge/icon update
+    # refreshes the rows in place.
     def _reload_folders(self) -> None:
         accounts = self._db.accounts()
         self._accounts = {account.id: account for account in accounts}
@@ -1651,28 +1910,26 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             for folder in self._db.folders_for_account(account.id)
         ]
         self._folders_by_id = {folder.id: folder for folder in folders}
-        # Two kinds of branch: top-level folders hang off their account, the
-        # rest off their parent folder.
-        self._account_roots = {}
         self._folder_children = {}
         for folder in folders:
-            if folder.parent_id is None:
-                self._account_roots.setdefault(folder.account_id, []).append(folder)
-            else:
+            if folder.parent_id is not None:
                 self._folder_children.setdefault(folder.parent_id, []).append(folder)
 
         shape = (
             [account.id for account in accounts],
-            [(folder.id, folder.parent_id) for folder in folders],
+            [
+                (folder.id, folder.parent_id, mail_sync.folder_role(folder))
+                for folder in folders
+            ],
         )
         if shape != self._folder_shape:
             self._folder_shape = shape
-            self._rebuild_folder_tree(accounts)
+            self._rebuild_folder_tree()
 
         # SQLite reuses the rowid of a deleted folder, so anything keyed by
         # folder id has to go when the folder does -- otherwise a new account
         # inherits the old one's badge, cooldown and paging state.
-        live_ids = {folder.id for folder in folders} | {ALL_INBOXES_ID}
+        live_ids = {folder.id for folder in folders} | set(self._virtual_folders)
         for cache in (
             self._loaded_counts,
             self._folders_with_more_mail,
@@ -1683,22 +1940,28 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 del cache[folder_id]
 
         # Nothing is selected on a first run, or after the open folder was
-        # pruned along with its account. An account row can't stand in: it is
-        # only a heading, so the list would sit empty with no way back. All
-        # Inboxes is in live_ids because it is not a database row -- it leaves
-        # the sidebar in _rebuild_folder_tree instead, with the second account.
+        # pruned along with its account.
         if self._current_folder is not None and self._current_folder.id not in live_ids:
             self._current_folder = None
         if self._current_folder is None:
             self._select_inbox_row()
 
-        # All Inboxes rides along; _folder_rows only holds it while it is shown.
-        for folder in (*folders, self._all_inboxes_row):
-            row = self._folder_rows.get(folder.id)
-            if row is not None:
-                row.bind(folder, self._unread_badge(folder))
-
+        self._rebind_folder_rows(folders)
         self._push_tray_unread(folders)
+
+    # Badges and icons change without the tree changing shape, so the rows on
+    # screen are refilled in place; the rest pick it up when bound.
+    def _rebind_folder_rows(self, folders: list[Folder]) -> None:
+        for folder in (*folders, *self._virtual_folders.values()):
+            row = self._folder_rows.get(folder.id)
+            if row is None:
+                continue
+            label, is_account_inbox = self._folder_row_labels.get(
+                folder.id, (None, False)
+            )
+            row.bind(folder, self._unread_badge(folder), label, is_account_inbox)
+            if is_account_inbox:
+                row.set_syncing(folder.account_id in self._syncing_account_ids)
 
     def _push_tray_unread(self, folders: list[Folder]) -> None:
         app = cast("PostcardApplication | None", self.get_application())
@@ -1712,7 +1975,9 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             )
         )
 
-    def _rebuild_folder_tree(self, accounts: list[Account]) -> None:
+    def _rebuild_folder_tree(self) -> None:
+        """Spark's layout: the role groups, then "Folders" with Archive and
+        Spam, then "More" for everything else. Inbox starts expanded."""
         # Preserve the selection by folder id, not row index — pruning stale
         # folders shifts the indices. Re-selecting is suppressed so it doesn't
         # rebuild the conversation list; callers refresh that explicitly.
@@ -1721,29 +1986,45 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         self._suppress_folder_refresh = True
 
         self._folder_rows.clear()
+        self._folder_row_labels.clear()
         self._account_rows.clear()
         self._folder_root_store.remove_all()
-        # With a single account it would just be that account's Inbox again.
-        if len(accounts) > 1:
-            self._folder_root_store.append(self._all_inboxes_row)
-        elif keep is self._all_inboxes_row:
-            keep = None
-        for account in accounts:
-            self._folder_root_store.append(account)
 
-        # Row 0 can now be the All Inboxes row rather than an ignored account
-        # heading, so filling the store has already moved _current_folder.
+        groups = self._virtual_folders
+        for group_id in (ALL_INBOXES_ID, STARRED_ID):
+            self._folder_root_store.append(groups[group_id])
+        for group_id in (ALL_DRAFTS_ID, ALL_SENT_ID, ALL_TRASH_ID):
+            if self._group_members(groups[group_id]):
+                self._folder_root_store.append(groups[group_id])
+        lower = [
+            groups[group_id]
+            for group_id in (ALL_ARCHIVE_ID, ALL_JUNK_ID)
+            if self._group_members(groups[group_id])
+        ]
+        has_more = bool(self._more_folders())
+        if lower or has_more:
+            self._folder_root_store.append(SidebarHeading(_("Folders")))
+        for group in lower:
+            self._folder_root_store.append(group)
+        if has_more:
+            self._folder_root_store.append(SidebarMore())
+
+        inbox_row = self._folder_tree_model.get_row(0)
+        if inbox_row is not None:
+            inbox_row.set_expanded(True)
+
         self._current_folder = keep
-        if keep is not None:
-            self._select_folder_by_id(keep.id)
+        if keep is not None and not self._select_folder_by_id(keep.id):
+            self._folder_selection.set_selected(Gtk.INVALID_LIST_POSITION)
 
         self._suppress_folder_refresh = False
 
-    def _select_folder_by_id(self, folder_id: int) -> None:
+    def _select_folder_by_id(self, folder_id: int) -> bool:
         for position, folder in self._folder_positions():
             if folder.id == folder_id:
                 self._folder_selection.set_selected(position)
-                return
+                return True
+        return False
 
     # --- the conversation list: contents, search, and paging --------------
 
@@ -1759,20 +2040,34 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         scroll_position = vadjustment.get_value() if vadjustment else 0.0
 
         matches = self._matching_conversations(keep_id)
-        self._replace_conversations(matches, keep_id)
+        self._replace_conversations(self._list_rows(matches), keep_id)
+        self._update_list_title()
         self._show_list_or_placeholder()
         self._update_reader()
         self._restore_scroll(vadjustment, scroll_position)
 
     def _matching_conversations(self, keep_id: int | None) -> list[Conversation]:
         """The conversations on screen, narrowed by the search box and filter."""
-        folder_ids = [folder.id for folder in self._view_folders()]
         query = self.search_entry.get_text().strip()
-        matches = (
-            self._db.search_conversations(folder_ids, query, self._server_hits)
-            if query
-            else self._db.conversations_in_folders(folder_ids)
-        )
+        if self._is_starred_view():
+            # Starred mail lives in any folder of any account.
+            every_folder = list(self._folders_by_id)
+            matches = [
+                conversation
+                for conversation in (
+                    self._db.search_conversations(every_folder, query, ())
+                    if query
+                    else self._db.starred_conversations(every_folder)
+                )
+                if conversation.is_starred
+            ]
+        else:
+            folder_ids = [folder.id for folder in self._view_folders()]
+            matches = (
+                self._db.search_conversations(folder_ids, query, self._server_hits)
+                if query
+                else self._db.conversations_in_folders(folder_ids)
+            )
 
         if not self.unread_button.get_active():
             return matches
@@ -1781,8 +2076,91 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # on the next refresh when you move to another.
         return [item for item in matches if item.is_unread or item.id == keep_id]
 
+    def _is_inbox_view(self) -> bool:
+        folder = self._current_folder
+        return folder is not None and (
+            self._is_unified()
+            or mail_sync.folder_role(folder) is mail_sync.FolderRole.INBOX
+        )
+
+    def _account_id_of(self, conversation: Conversation) -> int | None:
+        origin = self._origin(conversation.latest)
+        return origin[0].id if origin else None
+
+    def _account_label_for(self, account_id: int) -> str:
+        account = self._accounts.get(account_id)
+        return self._account_label(account) if account is not None else ""
+
+    def _list_rows(self, conversations: list[Conversation]) -> list[GObject.Object]:
+        """The smart inbox's rows for an inbox; date sections anywhere else.
+
+        A search shows plain dated results: a match folded into a bundle would
+        be a match the user can't see.
+        """
+        today = date.today()
+        if self.search_entry.get_text().strip() or not self._is_inbox_view():
+            self._open_bundle_key = None
+            return smart_inbox.build(
+                conversations, smart_inbox.VIEW_DATE, self._account_id_of, set(), today
+            )
+        # Bundling an account only means something beside other accounts.
+        bundled = (
+            {account.id for account in self._accounts.values() if account.is_bundled}
+            if self._is_unified()
+            else set()
+        )
+        if self._open_bundle_key is not None:
+            return smart_inbox.open_bundle(
+                conversations,
+                self._open_bundle_key,
+                self._account_id_of,
+                bundled,
+                today,
+            )
+        view = self._settings.get_string("inbox-view")
+        return smart_inbox.build(
+            conversations, view, self._account_id_of, bundled, today
+        )
+
+    def _update_list_title(self) -> None:
+        folder = self._current_folder
+        is_inbox = self._is_inbox_view()
+        is_bundle_open = self._open_bundle_key is not None and is_inbox
+        self.bundle_back_button.set_visible(is_bundle_open)
+        self.inbox_view_button.set_sensitive(is_inbox and not is_bundle_open)
+        if folder is None:
+            return
+        if is_bundle_open and self._open_bundle_key is not None:
+            self.inbox_title.set_title(
+                bundle_label(self._open_bundle_key, self._account_label_for)
+            )
+            self.inbox_title.set_subtitle(mail_sync.folder_label(folder))
+            return
+        self.inbox_title.set_title(mail_sync.folder_label(folder))
+        subtitles = {
+            smart_inbox.VIEW_IMPORTANCE: _("By Importance"),
+            smart_inbox.VIEW_CATEGORY: _("By Category"),
+            smart_inbox.VIEW_DATE: _("By Date"),
+        }
+        self.inbox_title.set_subtitle(
+            subtitles.get(self._settings.get_string("inbox-view"), "")
+            if is_inbox
+            else ""
+        )
+
+    def _open_bundle(self, key: str) -> None:
+        self._open_bundle_key = key
+        self._refresh_conversations()
+        vadjustment = self.conversation_scroller.get_vadjustment()
+        if vadjustment is not None:
+            vadjustment.set_value(0)
+
+    def _on_bundle_back(self, _button: Gtk.Button) -> None:
+        self._open_bundle_key = None
+        self._refresh_conversations()
+
     def _replace_conversations(
-        self, matches: list[Conversation], keep_id: int | None
+        self, matches: list[GObject.Object], keep_id: int | None
     ) -> None:
         """Swap in the new list, keeping keep_id selected if it survived.
 
@@ -1794,7 +2172,12 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         target = -1
         if keep_id is not None:
             target = next(
-                (i for i, item in enumerate(matches) if item.id == keep_id), -1
+                (
+                    i
+                    for i, item in enumerate(matches)
+                    if isinstance(item, Conversation) and item.id == keep_id
+                ),
+                -1,
             )
 
         store = self._conversation_store
@@ -1979,22 +2362,35 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         # reusable row), so it's fine to allocate here. A right-click gesture
         # opens the actions menu for that row.
         def on_setup(_factory: Gtk.SignalListItemFactory, item: Gtk.ListItem) -> None:
-            row = ConversationRow(self._avatars)
+            row = InboxItemRow(self._avatars)
             gesture = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
             gesture.connect("pressed", self._on_row_right_click, item)
-            row.add_controller(gesture)
+            row.conversation.add_controller(gesture)
+            # A bundle isn't selectable, so opening it is a plain click.
+            opener = Gtk.GestureClick(button=Gdk.BUTTON_PRIMARY)
+            opener.connect("released", self._on_bundle_clicked, item)
+            row.bundle.add_controller(opener)
             item.set_child(row)
 
         # bind: fill an existing widget from its item. Runs often (every
         # scroll), so keep it cheap — just copy fields across.
         def on_bind(_factory: Gtk.SignalListItemFactory, item: Gtk.ListItem) -> None:
             row = item.get_child()
-            conversation = item.get_item()
-            assert isinstance(row, ConversationRow)
-            assert isinstance(conversation, Conversation)
-            account, folder = self._origin(conversation.latest) or (None, None)
-            row.bind(
-                conversation,
+            entry = item.get_item()
+            assert isinstance(row, InboxItemRow)
+            is_conversation = isinstance(entry, Conversation)
+            item.set_selectable(is_conversation)
+            item.set_activatable(is_conversation)
+            if isinstance(entry, smart_inbox.InboxSection):
+                row.show_section(entry, self._account_label_for)
+                return
+            if isinstance(entry, smart_inbox.Bundle):
+                row.show_bundle(entry, self._account_label_for)
+                return
+            assert isinstance(entry, Conversation)
+            account, folder = self._origin(entry.latest) or (None, None)
+            row.show_conversation(
+                entry,
                 is_outgoing=folder is not None and mail_sync.is_outgoing(folder),
                 account_label=account.short_label
                 if account is not None and self._is_unified()
@@ -2004,6 +2400,18 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         factory.connect("setup", on_setup)
         factory.connect("bind", on_bind)
         return factory
+
+    def _on_bundle_clicked(
+        self,
+        _gesture: Gtk.GestureClick,
+        n_press: int,
+        _x: float,
+        _y: float,
+        item: Gtk.ListItem,
+    ) -> None:
+        entry = item.get_item()
+        if n_press == 1 and isinstance(entry, smart_inbox.Bundle):
+            self._open_bundle(entry.key)
 
     def _on_search_action(self, _action: Gio.SimpleAction, _param: object) -> None:
         self.search_bar.set_search_mode(not self.search_bar.get_search_mode())
@@ -2075,6 +2483,13 @@ class PostcardMainWindow(Adw.ApplicationWindow):
         else:
             self.star_button.set_icon_name("non-starred-symbolic")
             self.star_button.set_tooltip_text(_("Star"))
+
+        if all(conversation.is_priority for conversation in selected):
+            self.priority_button.set_tooltip_text(_("Remove Priority"))
+            self.priority_button.add_css_class("accent")
+        else:
+            self.priority_button.set_tooltip_text(_("Mark as Priority"))
+            self.priority_button.remove_css_class("accent")
 
     # Empty the reading pane, releasing each view's WebView as it goes.
     def _clear_thread(self) -> None:

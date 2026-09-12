@@ -14,6 +14,7 @@ class PostcardAccountsDialog(Adw.Dialog):
     __gtype_name__ = "PostcardAccountsDialog"
 
     accounts_group: Adw.PreferencesGroup = Gtk.Template.Child()
+    bundles_group: Adw.PreferencesGroup = Gtk.Template.Child()
     add_button: Gtk.Button = Gtk.Template.Child()
     online_accounts_button: Gtk.Button = Gtk.Template.Child()
 
@@ -21,6 +22,7 @@ class PostcardAccountsDialog(Adw.Dialog):
         super().__init__()
         self._db = db
         self._rows: list[Adw.ActionRow] = []
+        self._bundle_rows: list[Adw.SwitchRow] = []
 
         self.add_button.connect("clicked", self._on_add_clicked)
         self.online_accounts_button.connect("clicked", self._on_online_accounts_clicked)
@@ -30,6 +32,9 @@ class PostcardAccountsDialog(Adw.Dialog):
         for row in self._rows:
             self.accounts_group.remove(row)
         self._rows.clear()
+        for switch in self._bundle_rows:
+            self.bundles_group.remove(switch)
+        self._bundle_rows.clear()
 
         for account in self._db.accounts():
             row = Adw.ActionRow(title=account.email, subtitle=account.display_name)
@@ -45,6 +50,21 @@ class PostcardAccountsDialog(Adw.Dialog):
 
             self.accounts_group.add(row)
             self._rows.append(row)
+
+            switch = Adw.SwitchRow(
+                title=account.email,
+                subtitle=_("Show as one row"),
+                active=account.is_bundled,
+            )
+            switch.connect("notify::active", self._on_bundle_toggled, account.id)
+            self.bundles_group.add(switch)
+            self._bundle_rows.append(switch)
+        self.bundles_group.set_visible(len(self._bundle_rows) > 1)
+
+    def _on_bundle_toggled(
+        self, switch: Adw.SwitchRow, _param: object, account_id: int
+    ) -> None:
+        self._db.set_account_bundled(account_id, switch.get_active())
 
     def _on_remove_clicked(self, _button: Gtk.Button, account_id: int) -> None:
         self._db.delete_account(account_id)

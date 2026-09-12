@@ -27,6 +27,8 @@ class Email(GObject.Object):
         # message was sent by the account itself.
         recipient: str = "",
         recipient_address: str = "",
+        category: str = "",
+        is_priority: bool = False,
     ) -> None:
         super().__init__()
         self.id: int = id
@@ -45,3 +47,7 @@ class Email(GObject.Object):
         self.in_reply_to: str = in_reply_to
         self.references: str = references
         self.conversation_id: int | None = conversation_id
+        # A core.categories value, "" for mail stored before sorting existed.
+        self.category: str = category
+        # Set by the user, never inferred; kept on this machine only.
+        self.is_priority: bool = is_priority

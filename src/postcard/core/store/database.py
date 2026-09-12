@@ -23,7 +23,7 @@ from ..models.pending_action import PendingAction
 _EMAIL_COLUMNS = """
     id, folder_id, server_id, sender, sender_address, recipient,
     recipient_address, subject, preview, date, unread, starred, message_id,
-    in_reply_to, reference_ids, conversation_id
+    in_reply_to, reference_ids, conversation_id, category, is_priority
 """
 
 
@@ -113,6 +113,17 @@ MIGRATIONS = [
         flag TEXT NOT NULL DEFAULT '',
         should_add INTEGER NOT NULL DEFAULT 0,
         destination TEXT NOT NULL DEFAULT ''
+    );
+    """,
+    # Smart inbox. No backfill for category: a sync sorts the rows it sees
+    # again, and "" reads as people until then.
+    """
+    ALTER TABLE emails ADD COLUMN category TEXT NOT NULL DEFAULT '';
+    ALTER TABLE emails ADD COLUMN is_priority INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE accounts ADD COLUMN is_bundled INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE sender_categories (
+        address TEXT PRIMARY KEY,
+        category TEXT NOT NULL
     );
     """,
 ]
@@ -251,6 +262,7 @@ class Database:
             username=row["username"],
             goa_id=row["goa_id"],
             protocol=row["protocol"],
+            is_bundled=bool(row["is_bundled"]),
         )
 
     def accounts(self) -> list[Account]:
@@ -304,6 +316,13 @@ class Database:
             "SELECT * FROM accounts WHERE id = ?", (cursor.lastrowid,)
         ).fetchone()
         return self._account_from_row(row)
+
+    def set_account_bundled(self, account_id: int, is_bundled: bool) -> None:
+        self._conn.execute(
+            "UPDATE accounts SET is_bundled = ? WHERE id = ?",
+            (int(is_bundled), account_id),
+        )
+        self._conn.commit()
 
     def delete_account(self, account_id: int) -> None:
         # Flatten the tree first: the parent_id FK rejects deleting a parent
@@ -483,6 +502,23 @@ class Database:
             tuple(folder_ids),
         ).fetchall()
         return self._conversations_from_rows(rows, is_multi_folder=len(folder_ids) > 1)
+
+    def starred_conversations(self, folder_ids: Sequence[int]) -> list[Conversation]:
+        """Every thread in these folders with a starred message, whole."""
+        if not folder_ids:
+            return []
+        places = ",".join("?" * len(folder_ids))
+        rows = self._conn.execute(
+            f"""
+            SELECT {_EMAIL_COLUMNS} FROM emails
+            WHERE folder_id IN ({places}) AND COALESCE(conversation_id, id) IN (
+                SELECT COALESCE(conversation_id, id) FROM emails
+                WHERE folder_id IN ({places}) AND starred = 1
+            )
+            """,
+            (*folder_ids, *folder_ids),
+        ).fetchall()
+        return self._conversations_from_rows(rows, is_multi_folder=True)
 
     def search_conversations(
         self,
@@ -706,9 +742,12 @@ class Database:
             INSERT INTO emails
                 (folder_id, server_id, sender, subject, preview, date, unread,
                  starred, message_id, in_reply_to, reference_ids, sender_address,
-                 recipient, recipient_address)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 recipient, recipient_address, category)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(
+                (SELECT category FROM sender_categories WHERE address = ?), ?))
             ON CONFLICT (folder_id, server_id) DO UPDATE SET
+                category = CASE WHEN emails.category = ''
+                    THEN excluded.category ELSE emails.category END,
                 unread = excluded.unread, starred = excluded.starred,
                 recipient = excluded.recipient,
                 recipient_address = excluded.recipient_address,
@@ -730,6 +769,8 @@ class Database:
                 header.sender_address,
                 header.recipient,
                 header.recipient_address,
+                header.sender_address,
+                header.category,
             ),
         )
         self._conn.commit()
@@ -809,7 +850,34 @@ class Database:
             in_reply_to=row["in_reply_to"] or "",
             references=row["reference_ids"] or "",
             conversation_id=row["conversation_id"],
+            category=row["category"],
+            is_priority=bool(row["is_priority"]),
         )
+
+    # --- sorting and priority ------------------------------------------------
+
+    def set_sender_category(self, address: str, category: str) -> None:
+        """File every message from address under category, now and from now on."""
+        address = address.strip().lower()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO sender_categories (address, category) VALUES (?, ?)
+                ON CONFLICT (address) DO UPDATE SET category = excluded.category
+                """,
+                (address, category),
+            )
+            self._conn.execute(
+                "UPDATE emails SET category = ? WHERE sender_address = ?",
+                (category, address),
+            )
+
+    def set_priority(self, email_ids: Sequence[int], is_priority: bool) -> None:
+        self._conn.executemany(
+            "UPDATE emails SET is_priority = ? WHERE id = ?",
+            [(int(is_priority), email_id) for email_id in email_ids],
+        )
+        self._conn.commit()
 
     # --- actions waiting for the network --------------------------------------
 

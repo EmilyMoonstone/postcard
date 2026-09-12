@@ -508,3 +508,57 @@ def test_a_refused_idle_is_an_error(idle_link):
 
     with pytest.raises(ImapError, match="IDLE refused"):
         session.wait_for_change(1, wakeup)
+
+
+# --- category signals ---------------------------------------------------------
+
+
+def test_the_categorizing_headers_come_back_with_the_row(monkeypatch):
+    header_block = (
+        b"From: GitHub <notifications@github.com>\r\n"
+        b"Subject: [repo] PR\r\n"
+        b"List-Unsubscribe: <https://github.com/u>\r\n"
+        b"Precedence: list\r\n\r\n"
+    )
+    reply = ("OK", [(b"1 (UID 5 FLAGS () BODY[HEADER.FIELDS (X)] {10}", header_block)])
+    session = connect(monkeypatch, FakeImap(fetch_reply=reply))
+
+    [header] = session.fetch_recent_headers(exists=1, limit=50)
+
+    assert dict(header.signals) == {
+        "list-unsubscribe": "<https://github.com/u>",
+        "precedence": "list",
+    }
+    assert header.is_invitation is False
+
+
+def test_a_calendar_part_in_the_body_slice_marks_an_invitation(monkeypatch):
+    reply = (
+        "OK",
+        [
+            (
+                b"1 (UID 6 FLAGS () BODY[HEADER.FIELDS (X)] {10}",
+                b'Content-Type: multipart/alternative; boundary="b"\r\n\r\n',
+            ),
+            (
+                b" BODY[TEXT]<0> {80}",
+                b"--b\r\nContent-Type: text/plain\r\n\r\nhi\r\n"
+                b"--b\r\nContent-Type: text/calendar; method=REQUEST\r\n",
+            ),
+            b")",
+        ],
+    )
+    session = connect(monkeypatch, FakeImap(fetch_reply=reply))
+
+    [header] = session.fetch_recent_headers(exists=1, limit=50)
+
+    assert header.is_invitation is True
+
+
+def test_a_gmail_search_is_limited_to_the_uids_given(monkeypatch):
+    imap = FakeImap(search_reply=("OK", [b"2"]))
+    session = connect(monkeypatch, imap)
+
+    assert session.search_gmail(["1", "2"], "category:updates") == {"2"}
+    assert imap.calls == [("SEARCH", "UID", "1,2", "X-GM-RAW", '"category:updates"')]
+    assert session.search_gmail([], "category:updates") == set()

@@ -7,12 +7,18 @@ import urllib.error
 import urllib.request
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 from functools import lru_cache
 from gettext import gettext as _
 
+from .core.categories import (
+    CATEGORY_INVITATION,
+    CATEGORY_NEWSLETTER,
+    CATEGORY_NOTIFICATION,
+    categorize,
+)
 from .core.models.account import Account
 from .core.models.email import Email
 from .core.models.folder import Folder, FolderRole
@@ -266,8 +272,12 @@ def fetch_mailbox(
         raw = session.fetch_recent_headers(exists, limit, offset)
         should_count = should_count_unread and offset == 0
         counts = _unread_counts(session, mailboxes, target) if should_count else {}
+        gmail_categories = _gmail_categories(session, [f.uid for f in raw])
 
-    messages = [_to_message_header(fetched) for fetched in raw]
+    messages = [
+        _with_gmail_category(_to_message_header(fetched), gmail_categories)
+        for fetched in raw
+    ]
 
     return SyncResult(
         folders=mailboxes,
@@ -381,6 +391,43 @@ def _fetch_graph_mailbox(
     )
 
 
+# Gmail's inbox tabs, and what each means here. Primary and Forums say nothing
+# the header rules don't, so those are left to them.
+GMAIL_CATEGORIES = (
+    ("category:promotions", CATEGORY_NEWSLETTER),
+    ("category:social", CATEGORY_NOTIFICATION),
+    ("category:updates", CATEGORY_NOTIFICATION),
+)
+
+
+def _gmail_categories(session: ImapSession, uids: list[str]) -> dict[str, str]:
+    """The category Gmail filed each of these UIDs under, where it did.
+
+    Gmail has seen far more mail than any rule here, so its sorting wins --
+    but only on Gmail, and never over an invitation. A search that fails costs
+    only this garnish, not the sync.
+    """
+    if not uids or not session.has_capability(GMAIL_CAPABILITY):
+        return {}
+    found: dict[str, str] = {}
+    for query, category in GMAIL_CATEGORIES:
+        try:
+            for uid in session.search_gmail(uids, query):
+                found.setdefault(uid, category)
+        except ImapError:
+            logger.warning("Gmail search %s failed", query, exc_info=True)
+    return found
+
+
+def _with_gmail_category(
+    header: MessageHeader, gmail_categories: dict[str, str]
+) -> MessageHeader:
+    category = gmail_categories.get(header.uid)
+    if category is None or header.category == CATEGORY_INVITATION:
+        return header
+    return replace(header, category=category)
+
+
 def _to_message_header(fetched: FetchedHeader) -> MessageHeader:
     """Turn raw wire headers into the display-ready form.
 
@@ -400,6 +447,11 @@ def _to_message_header(fetched: FetchedHeader) -> MessageHeader:
         is_unread=not fetched.seen,
         is_starred=fetched.flagged,
         preview=fetched.preview,
+        category=categorize(
+            dict(fetched.signals),
+            _sender_address(fetched.from_header),
+            is_invitation=fetched.is_invitation,
+        ),
         message_id=fetched.message_id,
         in_reply_to=fetched.in_reply_to,
         references=fetched.references,

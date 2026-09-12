@@ -55,6 +55,7 @@ class Account(GObject.Object):
         username: str = "",
         goa_id: str = "",
         protocol: str = PROTOCOL_IMAP,
+        is_bundled: bool = False,
     ) -> None:
         super().__init__()
         self.id: int = id
@@ -73,6 +74,9 @@ class Account(GObject.Object):
         # where its credentials live instead of the keyring.
         self.goa_id: str = goa_id
         self.protocol: str = protocol
+        # Whether the unified inbox gathers this account's mail into one
+        # bundle row instead of listing each conversation.
+        self.is_bundled: bool = is_bundled
 
     @property
     def is_graph(self) -> bool:

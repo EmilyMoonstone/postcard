@@ -60,7 +60,8 @@ Postcard has the classic three panel layout. folders on the left, conversations 
 - **Any IMAP/SMTP account**, as many as you want. Passwords are stored in the system keyring. You can choose TLS or STARTTLS for each server, so Proton Mail Bridge also works.
 - **A separate username** when the server's login is not your email address, or the mailbox is reached through a preferred alias.
 - **Server settings are filled in automatically** from your email address for Gmail, Yahoo, iCloud, Outlook, Fastmail, Zoho, AOL and Yandex. If you type something by hand, Postcard does not touch it.
-- **One unified inbox.** An *All Inboxes* row at the top of the sidebar shows mail from every account in a single list, and archive, trash, star and reply all still act on the right account.
+- **One unified inbox, organized like Spark.** *Inbox*, *Starred*, *Drafts*, *Sent*, *Trash*, *Archive* and *Spam* each gather every account, with the accounts listed underneath; every other folder is one click away under *More*. Archive, trash, star and reply all still act on the right account.
+- **Smart inbox.** Threads you mark as priority stay on top. Newsletters, notifications and invitations fold into one row each, sorted by the mail's own headers (and Gmail's categories on Gmail), with no AI and nothing leaving your computer. Tell Postcard once where a sender belongs and it remembers. Choose per account whether it shows up as one row of its own, and switch between *By Importance*, *By Category* and *By Date*.
 - **Threaded conversations** and nested folders shown as a tree.
 - **Full-text search** across all your mail, plus a search on the server that finds words in message bodies and in mail not synced yet.
 - **New mail right away**: IMAP IDLE pushes it as it arrives (Microsoft 365 is checked every minute), on top of the regular sync.

@@ -8,6 +8,7 @@ import socket
 from email import policy
 from typing import NamedTuple
 
+from ..categories import SIGNAL_HEADERS
 from ..mime.preview import PREVIEW_BYTES, preview_text
 from ..models.folder import FolderRole
 
@@ -93,14 +94,22 @@ class FetchedHeader(NamedTuple):
     seen: bool
     flagged: bool
     preview: str = ""
+    # The categorizing headers it had, as (lowercased name, value) pairs.
+    signals: tuple[tuple[str, str], ...] = ()
+    is_invitation: bool = False
 
 
 # The headers a sync reads. Content-Type and Content-Transfer-Encoding are only
 # there to decode the body slice fetched beside them into a preview.
 _HEADER_FIELDS = (
     "DATE FROM TO CC SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES "
-    "CONTENT-TYPE CONTENT-TRANSFER-ENCODING"
+    "CONTENT-TYPE CONTENT-TRANSFER-ENCODING "
+    # What core.categories reads to sort the message.
+    + " ".join(name.upper() for name in SIGNAL_HEADERS)
 )
+
+# A calendar part shows in the body slice as its own Content-Type line.
+_CALENDAR_PART = re.compile(rb"content-type:\s*text/calendar", re.IGNORECASE)
 
 # A FETCH reply's first line for a message starts with its sequence number;
 # the lines for its later literals start with a space.
@@ -397,6 +406,16 @@ class ImapSession:
         imap.literal = query.encode("utf-8")  # pyright: ignore[reportAttributeAccessIssue]
         return self._uid_search("CHARSET", "UTF-8", "TEXT")
 
+    def search_gmail(self, uids: list[str], gmail_query: str) -> set[str]:
+        """Which of these UIDs match a Gmail search, such as "category:updates".
+
+        X-GM-RAW is Gmail's own search language, and the only way its inbox
+        categories reach an IMAP client.
+        """
+        if not uids:
+            return set()
+        return self._uid_search("UID", ",".join(uids), "X-GM-RAW", f'"{gmail_query}"')
+
     def _uid_search(self, *criteria: str) -> set[str]:
         try:
             status, payload = self._require_imap().uid("SEARCH", *criteria)
@@ -543,4 +562,9 @@ class ImapSession:
             seen=FLAG_SEEN in flag_text,
             flagged=FLAG_FLAGGED in flag_text,
             preview=preview_text(header_bytes, body) if body else "",
+            signals=tuple(
+                (name, header(name)) for name in SIGNAL_HEADERS if headers[name]
+            ),
+            is_invitation=headers.get_content_type() == "text/calendar"
+            or bool(_CALENDAR_PART.search(body)),
         )

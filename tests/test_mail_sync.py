@@ -1263,3 +1263,69 @@ def test_a_graph_account_answers_through_the_calendar(graph):
     )
 
     assert graph.calls == [("event", "m1", "DECLINED")]
+
+
+def test_imap_headers_are_sorted_into_a_category():
+    header = _to_message_header(
+        fetched(from_header="GitHub <notifications@github.com>", signals=())
+    )
+    assert header.category == "notification"
+
+    listed = _to_message_header(
+        fetched(
+            from_header="Shop <hello@shop.example>",
+            signals=(("list-unsubscribe", "<https://x>"),),
+        )
+    )
+    assert listed.category == "newsletter"
+
+
+def test_gmail_s_own_categories_win_over_the_header_rules(monkeypatch):
+    class GmailSession(FakeImapSession):
+        def select(self, mailbox, is_readonly=True):
+            return 3
+
+        def fetch_recent_headers(self, exists, limit, offset):
+            return [
+                fetched(uid="1", from_header="Ada <ada@example.com>"),
+                fetched(uid="2", from_header="Shop <hello@shop.example>"),
+                fetched(uid="3", from_header="Cal <cal@x>", is_invitation=True),
+            ]
+
+        def has_capability(self, name):
+            return name == GMAIL_CAPABILITY
+
+        def search_gmail(self, uids, query):
+            return {"category:promotions": {"2", "3"}, "category:updates": {"1"}}.get(
+                query, set()
+            )
+
+    monkeypatch.setattr(mail_sync, "ImapSession", GmailSession)
+
+    result = fetch_mailbox(account(), CREDENTIAL, should_count_unread=False)
+
+    assert [m.category for m in result.messages] == [
+        "notification",
+        "newsletter",
+        "invitation",
+    ]
+
+
+def test_other_servers_are_not_asked_gmail_s_categories(monkeypatch):
+    class PlainSession(FakeImapSession):
+        def select(self, mailbox, is_readonly=True):
+            return 1
+
+        def fetch_recent_headers(self, exists, limit, offset):
+            return [fetched(uid="1", from_header="Ada <ada@example.com>")]
+
+        def has_capability(self, name):
+            return False
+
+        def search_gmail(self, uids, query):
+            raise AssertionError("not Gmail")
+
+    monkeypatch.setattr(mail_sync, "ImapSession", PlainSession)
+
+    [message] = fetch_mailbox(account(), CREDENTIAL, should_count_unread=False).messages
+    assert message.category == "people"

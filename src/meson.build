@@ -49,14 +49,17 @@ postcard_sources = [
   'postcard/mail_sync.py',
   'postcard/mail_watch.py',
   'postcard/folder_row.py',
+  'postcard/inbox_rows.py',
 ]
 python_installation.install_sources(postcard_sources, subdir: 'postcard')
 
 postcard_core_sources = [
   'postcard/core/__init__.py',
   'postcard/core/secrets.py',
+  'postcard/core/smart_inbox.py',
   'postcard/core/goa.py',
   'postcard/core/autostart.py',
+  'postcard/core/categories.py',
   'postcard/core/avatars.py',
   'postcard/core/compose.py',
   'postcard/core/providers.py',

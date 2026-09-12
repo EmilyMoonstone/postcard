@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from ..categories import categorize
 from ..models.message_header import MessageHeader
 from ..threader import NO_SUBJECT
 from .graph_session import BatchRequest, GraphError, GraphSession, quote_id, with_query
@@ -87,6 +88,15 @@ def message_header(item: dict) -> MessageHeader:
         in_reply_to=_header(item, "In-Reply-To"),
         references=_header(item, "References"),
         addresses=[(sender_name, sender_address), *recipients, *copied],
+        category=categorize(
+            {
+                str(header.get("name", "")).lower(): str(header.get("value", ""))
+                for header in item.get("internetMessageHeaders") or []
+            },
+            sender_address,
+            # Exchange types invitations and cancellations as event messages.
+            is_invitation="eventMessage" in str(item.get("@odata.type", "")),
+        ),
     )
 
 

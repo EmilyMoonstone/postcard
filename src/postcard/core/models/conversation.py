@@ -43,6 +43,15 @@ class Conversation(GObject.Object):
         return any(mail.is_starred for mail in self.emails)
 
     @property
+    def is_priority(self) -> bool:
+        return any(mail.is_priority for mail in self.emails)
+
+    @property
+    def category(self) -> str:
+        """The latest message's: a thread is a newsletter if its newest mail is."""
+        return self.latest.category
+
+    @property
     def participants(self) -> str:
         seen_senders: list[str] = []
         for mail in self.emails:

@@ -36,6 +36,16 @@
 			<summary>Background notice already shown</summary>
 			<description>Whether the notice about the app still checking for mail after the window is closed has been shown. It is only shown once.</description>
 		</key>
+		<key name="inbox-view" type="s">
+			<choices>
+				<choice value="importance"/>
+				<choice value="category"/>
+				<choice value="date"/>
+			</choices>
+			<default>'importance'</default>
+			<summary>How the inbox is laid out</summary>
+			<description>"importance" puts priority threads first and folds newsletters, notifications, invitations and bundled accounts into one row each; "category" lists every thread under its category; "date" lists them by date only.</description>
+		</key>
 		<key name="sync-interval-minutes" type="i">
 			<range min="0" max="1440"/>
 			<default>15</default>

@@ -256,3 +256,22 @@ def test_an_invitation_is_answered_through_its_event():
 def test_a_message_without_an_event_cannot_be_answered_through_graph():
     with pytest.raises(GraphError, match="carries no event"):
         respond_to_event(EventGraph(None), "m1", "ACCEPTED")  # type: ignore[arg-type]
+
+
+def test_a_graph_message_is_sorted_by_its_headers_and_type():
+    newsletter = message_header(
+        {
+            "id": "n",
+            "from": person("Shop", "hello@shop.example"),
+            "internetMessageHeaders": [
+                {"name": "List-Unsubscribe", "value": "<https://x/u>"}
+            ],
+        }
+    )
+    invitation = message_header(
+        {"id": "i", "@odata.type": "#microsoft.graph.eventMessageRequest"}
+    )
+
+    assert newsletter.category == "newsletter"
+    assert invitation.category == "invitation"
+    assert message_header(ITEM).category == "people"

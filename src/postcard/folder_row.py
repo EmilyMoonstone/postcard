@@ -1,4 +1,4 @@
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, GObject, Gtk
 
 from . import mail_sync
 from .core.models.folder import Folder
@@ -35,48 +35,54 @@ class FolderRow(Gtk.Box):
         self._badge.add_css_class("dim-label")
         self.append(self._badge)
 
-        # Set only for account rows: clicking the address toggles its folders,
-        # the same as the expander arrow next to it.
-        self._expandable: Gtk.TreeListRow | None = None
-        click = Gtk.GestureClick()
-        click.connect("released", self._on_released)
-        self.add_controller(click)
-
-    def _on_released(
-        self, _gesture: Gtk.GestureClick, n_press: int, _x: float, _y: float
-    ) -> None:
-        if self._expandable is None or n_press != 1:
-            return
-        self._expandable.set_expanded(not self._expandable.get_expanded())
-
     # Fill this row from a folder. Called every time the row is (re)used.
-    def bind(self, folder: Folder, unread_count: int) -> None:
+    # `label` stands in for the folder's own name where the sidebar lists a
+    # role folder under its account, and `is_syncable` gives it the spinner.
+    def bind(
+        self,
+        folder: Folder,
+        unread_count: int,
+        label: str | None = None,
+        is_syncable: bool = False,
+    ) -> None:
+        self._icon.set_visible(True)
         self._icon.set_from_icon_name(folder.icon_name)
-        self._name_label.set_label(mail_sync.folder_label(folder))
-        self._name_label.remove_css_class("heading")
-        self._expandable = None
-        self._spinner_slot.set_visible(False)
+        self._name_label.set_label(label or mail_sync.folder_label(folder))
+        self._name_label.remove_css_class("sidebar-heading")
+        self._spinner_slot.set_visible(is_syncable)
         self.set_syncing(False)
         self._badge.set_label(str(unread_count))
         self._badge.set_visible(unread_count > 0)
 
-    # The same widget also draws the account headings the folders sit under, so
-    # bind() above has to undo whatever this sets -- rows are recycled for both.
-    def bind_account(
-        self, label: str, tree_list_row: Gtk.TreeListRow, is_syncing: bool
-    ) -> None:
-        self._expandable = tree_list_row
-        self._icon.set_from_icon_name("avatar-default-symbolic")
-        self.set_account_label(label)
-        self._name_label.add_css_class("heading")
-        self._spinner_slot.set_visible(True)
-        self.set_syncing(is_syncing)
+    # A section title between the groups, like Spark's "Ordner".
+    def bind_heading(self, label: str) -> None:
+        self._icon.set_visible(False)
+        self._name_label.set_label(label)
+        self._name_label.add_css_class("sidebar-heading")
+        self._spinner_slot.set_visible(False)
         self._badge.set_visible(False)
 
-    # Also called on its own when the display-name preference is toggled.
-    def set_account_label(self, label: str) -> None:
+    # The row that opens every folder the groups don't show.
+    def bind_more(self, label: str) -> None:
+        self._icon.set_visible(True)
+        self._icon.set_from_icon_name("view-more-horizontal-symbolic")
         self._name_label.set_label(label)
+        self._name_label.remove_css_class("sidebar-heading")
+        self._spinner_slot.set_visible(False)
+        self._badge.set_visible(False)
 
-    # Only account rows use this; the window calls it as syncs start and finish.
+    # The window calls this as an account's syncs start and finish.
     def set_syncing(self, is_syncing: bool) -> None:
         self._spinner.set_visible(is_syncing)
+
+
+class SidebarHeading(GObject.Object):
+    __gtype_name__ = "PostcardSidebarHeading"
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.label: str = label
+
+
+class SidebarMore(GObject.Object):
+    __gtype_name__ = "PostcardSidebarMore"
