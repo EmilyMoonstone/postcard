@@ -56,19 +56,21 @@ Postcard has the classic three panel layout. folders on the left, conversations 
 
 ### 📬 Mail
 
-- **Google in one click.** If you already added your Google account in GNOME Settings under Online Accounts, just pick it in Postcard. It uses OAuth, so Postcard never sees your password.
+- **Google and Microsoft 365 in one click.** If you already added the account in GNOME Settings under Online Accounts, just pick it in Postcard. It uses OAuth, so Postcard never sees your password. Microsoft 365 and Outlook.com mail goes over the Microsoft Graph API.
 - **Any IMAP/SMTP account**, as many as you want. Passwords are stored in the system keyring. You can choose TLS or STARTTLS for each server, so Proton Mail Bridge also works.
 - **A separate username** when the server's login is not your email address, or the mailbox is reached through a preferred alias.
 - **Server settings are filled in automatically** from your email address for Gmail, Yahoo, iCloud, Outlook, Fastmail, Zoho, AOL and Yandex. If you type something by hand, Postcard does not touch it.
 - **One unified inbox.** An *All Inboxes* row at the top of the sidebar shows mail from every account in a single list, and archive, trash, star and reply all still act on the right account.
 - **Threaded conversations** and nested folders shown as a tree.
-- **Full-text search** across all your mail.
-- **Works offline** from the local cache, and keeps syncing after you close the window (optional)
+- **Full-text search** across all your mail, plus a search on the server that finds words in message bodies and in mail not synced yet.
+- **New mail right away**: IMAP IDLE pushes it as it arrives (Microsoft 365 is checked every minute), on top of the regular sync.
+- **Works offline** from the local cache. Marking read, starring and moving while offline are kept and sent to the server when you reconnect. Keeps syncing after you close the window (optional)
 
 ### ✍️ Composing
 
 - **Rich text**: bold, italic, underline, strikethrough, bulleted and numbered lists, links. Mail is sent as HTML with a plain-text version included.
-- **Reply, reply-all and forward**, with Cc/Bcc, a signature, and a Drafts/Outbox that does not lose your message.
+- **Reply, reply-all and forward**, with Cc/Bcc, a signature, and a Drafts/Outbox that does not lose your message. Drafts are saved to the server too, so your other devices see them.
+- **Calendar invitations**: see when and where, and accept, answer maybe or decline from the message.
 - **Recipient autocomplete** from the addresses already in your mail.
 
 ### 🖥️ Desktop
