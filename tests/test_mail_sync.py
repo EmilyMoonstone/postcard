@@ -1129,7 +1129,7 @@ def test_a_graph_draft_goes_to_graph(graph):
     assert graph.calls == [("draft", b"raw")]
 
 
-# --- searching on the server ------------------------------------------------------
+# --- searching on the server ----------------------------------------------------
 
 
 def test_an_imap_search_fetches_the_newest_matches(monkeypatch):
@@ -1164,7 +1164,7 @@ def test_a_graph_search_goes_to_graph(graph):
     assert graph.calls == [("search", "in", "lunch", mail_sync.SEARCH_LIMIT)]
 
 
-# --- replaying actions queued while offline ------------------------------------------
+# --- replaying actions queued while offline --------------------------------------
 
 
 def queued(action_id, kind="flag", **fields) -> PendingAction:
@@ -1236,3 +1236,30 @@ def test_a_move_that_fails_part_way_counts_as_refused(monkeypatch):
     )
 
     assert (finished, error) == ([3], None)
+
+
+# --- answering invitations ------------------------------------------------------
+
+
+def test_an_imap_account_mails_the_reply_to_the_organizer(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        mail_sync, "send_message", lambda *args: sent.append((args[3], args[4]))
+    )
+    reply = b'To: "Pauli, Emily" <emily@example.org>\r\n\r\nics'
+
+    mail_sync.respond_to_invitation(account(), CREDENTIAL, "7", "ACCEPTED", reply)
+
+    assert sent == [(["emily@example.org"], reply)]
+
+
+def test_a_graph_account_answers_through_the_calendar(graph):
+    graph.respond_to_event = lambda session, uid, response: graph.calls.append(
+        ("event", uid, response)
+    )
+
+    mail_sync.respond_to_invitation(
+        graph_account(), GRAPH_TOKEN, "m1", "DECLINED", b"To: x@y\r\n\r\n"
+    )
+
+    assert graph.calls == [("event", "m1", "DECLINED")]

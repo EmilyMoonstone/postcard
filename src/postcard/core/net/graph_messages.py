@@ -125,6 +125,34 @@ def search_headers(
     return [message_header(item) for item in session.get(path).get("value", [])]
 
 
+# Graph's action for each iMIP participation status.
+_EVENT_ACTIONS = {
+    "ACCEPTED": "accept",
+    "TENTATIVE": "tentativelyAccept",
+    "DECLINED": "decline",
+}
+
+
+def respond_to_event(session: GraphSession, message_id: str, response: str) -> None:
+    """Answer the invitation a message carries, through the calendar itself.
+
+    Unlike a mailed reply this also files the answer in the attendee's own
+    Exchange calendar, where the event was already placed as tentative.
+    """
+    expanded = session.get(
+        f"/me/messages/{quote_id(message_id)}"
+        "?$select=id&$expand=microsoft.graph.eventMessage/event($select=id)"
+    )
+    event = expanded.get("event") or {}
+    if not event.get("id"):
+        raise GraphError(404, "noEvent", f"message {message_id} carries no event")
+    session.send(
+        "POST",
+        f"/me/events/{quote_id(event['id'])}/{_EVENT_ACTIONS[response]}",
+        {"sendResponse": True},
+    )
+
+
 def fetch_mime(session: GraphSession, message_id: str) -> bytes:
     """The whole message as RFC 5322 bytes, the same thing an IMAP fetch gives."""
     return session.request("GET", f"/me/messages/{quote_id(message_id)}/$value").body

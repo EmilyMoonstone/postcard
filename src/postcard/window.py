@@ -23,6 +23,8 @@ from .avatar_loader import AvatarLoader
 from .composer_window import PostcardComposerWindow, composer_for_mailto
 from .conversation_row import ConversationRow
 from .core import compose, secrets
+from .core.mime.invitation import Invitation
+from .core.mime.invitation import build_reply as build_invitation_reply
 from .core.mime.message_parser import ParsedMessage, Unsubscribe
 from .core.models.account import Account
 from .core.models.attachment import Attachment
@@ -2113,6 +2115,7 @@ class PostcardMainWindow(Adw.ApplicationWindow):
                 on_open_attachment=self._open_attachment,
                 on_rendered=self._on_newest_rendered if is_newest else None,
                 on_unsubscribe=self._on_unsubscribe,
+                on_respond=self._respond_to_invitation,
                 is_expanded=is_newest,
                 should_load_remote_images=should_load_remote_images,
                 delivered_to=delivered_to,
@@ -2193,6 +2196,77 @@ class PostcardMainWindow(Adw.ApplicationWindow):
             GLib.idle_add(self._deliver_body, callback, request.email_id, None, message)
             return
         GLib.idle_add(self._deliver_body, callback, request.email_id, raw, None)
+
+    def _respond_to_invitation(
+        self,
+        mail: Email,
+        invitation: Invitation,
+        response: str,
+        done: Callable[[bool], None],
+    ) -> None:
+        origin = self._origin(mail)
+        if origin is None or not invitation.organizer:
+            self._toast(_("This invitation can't be answered."))
+            done(False)
+            return
+        account, _folder = origin
+        reply = build_invitation_reply(
+            invitation,
+            account.email,
+            account.display_name.strip(),
+            response,
+            datetime.now().astimezone(),
+        ).as_bytes()
+        threading.Thread(
+            target=self._invitation_worker,
+            args=(account, mail.server_id or "", response, reply, done),
+            daemon=True,
+        ).start()
+
+    # Runs on the worker thread: network only, no Gtk/database access.
+    def _invitation_worker(
+        self,
+        account: Account,
+        message_uid: str,
+        response: str,
+        reply: bytes,
+        done: Callable[[bool], None],
+    ) -> None:
+        credential = secrets.credential_for(account)
+        if credential is None:
+            logger.warning("could not sign in to %s to answer", account.email)
+            GLib.idle_add(
+                self._on_invitation_answered,
+                done,
+                account,
+                RuntimeError(_("Could not sign in to this account.")),
+            )
+            return
+        try:
+            mail_sync.respond_to_invitation(
+                account, credential, message_uid, response, reply
+            )
+        except Exception as error:
+            logger.exception(
+                "could not answer an invitation %s (account %s)",
+                response,
+                account.email,
+            )
+            GLib.idle_add(self._on_invitation_answered, done, account, error)
+            return
+        GLib.idle_add(self._on_invitation_answered, done, account, None)
+
+    def _on_invitation_answered(
+        self,
+        done: Callable[[bool], None],
+        account: Account,
+        error: Exception | None,
+    ) -> bool:
+        done(error is None)
+        if error is not None:
+            _is_auth_failure, message = errors.classify(error, account.smtp_host)
+            self._toast(_("Couldn't answer the invitation: {msg}").format(msg=message))
+        return False
 
     # Back on the main thread: cache the body, then hand it to the MessageView.
     def _deliver_body(

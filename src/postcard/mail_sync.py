@@ -1,3 +1,4 @@
+import email
 import logging
 import re
 import threading
@@ -573,6 +574,26 @@ def _replay_one(
         )
         if result.error is not None:
             raise ImapError(result.error)
+
+
+def respond_to_invitation(
+    account: Account,
+    credential: Credential,
+    message_uid: str,
+    response: str,
+    reply: bytes,
+) -> None:
+    """Accept, tentatively accept or decline an invitation.
+
+    Exchange answers through the event, which also updates the account's own
+    calendar; everyone else gets the iMIP reply mailed to the organizer, which
+    is what Google Calendar, Thunderbird and Outlook all read.
+    """
+    if account.is_graph and message_uid:
+        graph_messages.respond_to_event(GraphSession(credential), message_uid, response)
+        return
+    organizer = str(email.message_from_bytes(reply)["To"] or "")
+    send_message(account, credential, account.email, [parseaddr(organizer)[1]], reply)
 
 
 def save_draft(
