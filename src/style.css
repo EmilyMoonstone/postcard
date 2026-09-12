@@ -41,8 +41,11 @@
   color: @accent_color;
 }
 
-.message-html {
-  background-color: #ffffff;
+/* The body page paints its own background in the reader's colours; the frame
+   gives it the UI's rounded corners and hairline border. */
+.message-body-frame {
+  border-radius: 12px;
+  border: 1px solid alpha(currentColor, 0.12);
 }
 
 /* Smart inbox. The headings sit between rows like Spark's, set small and dim

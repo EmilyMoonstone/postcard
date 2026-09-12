@@ -7,7 +7,7 @@ gi.require_version("WebKit", "6.0")
 
 from gettext import gettext as _
 
-from gi.repository import Adw, Gdk, GLib, Gtk, Pango, WebKit
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango, WebKit
 
 from . import mail_sync
 from .avatar_loader import AvatarLoader
@@ -39,9 +39,18 @@ SMALL_GUTTER = 6
 EDGE = 24
 AVATAR_SIZE = 40
 
-# Tall enough that most messages need no inner scrolling; the WebView can't
-# report its content height until after layout, so this is a fixed guess.
-BODY_HEIGHT = 800
+# The body is measured once it has laid out; until then it is this short, so a
+# one-line message never leaves a page of empty space behind it.
+BODY_MIN_HEIGHT = 48
+
+# Re-measured after these delays too: remote images and web fonts change the
+# height after the load itself has finished.
+REMEASURE_MS = (250, 1000, 3000)
+
+# Measuring runs in a script world of its own, so it shares nothing with a page
+# that has no scripts of its own anyway.
+MEASURE_WORLD = "postcard-measure"
+MEASURE_SCRIPT = "Math.ceil(document.documentElement.getBoundingClientRect().height)"
 
 # An unrelated WebView costs its own web process: ~300 MB and up to 1.5 s to
 # start. Related views share one, so every message body hangs off this anchor,
@@ -161,6 +170,11 @@ class MessageView(Gtk.Box):
         self._placeholder: Gtk.Widget | None = None
         self._webview: WebKit.WebView | None = None
         self._html: str | None = None
+        # None follows the app's style; True/False is the switch above the body.
+        self._is_dark_override: bool | None = None
+        self._style_manager = Adw.StyleManager.get_default()
+        self._dark_handler = 0
+        self._theme_button: Gtk.Button | None = None
 
         self.raw: bytes | None = None
         self.parsed: message_parser.ParsedMessage | None = None
@@ -245,11 +259,12 @@ class MessageView(Gtk.Box):
         self._show_unsubscribe(self.parsed.unsubscribe)
         self._show_invitation(self.parsed.invitation)
 
+        # Above the body, where a long message would otherwise bury them.
+        self._populate_attachments(self.parsed.attachments)
         if self.parsed.html_body:
             self._show_html(self.parsed.html_body)
         else:
             self._show_text(self.parsed.text_body or "")
-        self._populate_attachments(self.parsed.attachments)
 
         if self._on_rendered is not None:
             self._on_rendered(self)
@@ -418,10 +433,15 @@ class MessageView(Gtk.Box):
             self._images_banner = banner
 
         webview = WebKit.WebView(related_view=_ensure_anchor())
-        webview.set_size_request(-1, BODY_HEIGHT)
+        webview.set_size_request(-1, BODY_MIN_HEIGHT)
         webview.connect("decide-policy", self._on_decide_policy)
+        webview.connect("load-changed", self._on_load_changed)
         settings = webview.get_settings()
-        settings.set_enable_javascript(False)
+        # The page itself never runs a script -- no <script>, no handlers, no
+        # javascript: links, and the CSP forbids them besides. Scripting stays
+        # on only so the app can measure the laid-out height from outside.
+        settings.set_enable_javascript(True)
+        settings.set_enable_javascript_markup(False)
         # A message body needs none of these, and each one carries buffers.
         settings.set_enable_page_cache(False)
         settings.set_enable_media(False)
@@ -434,13 +454,94 @@ class MessageView(Gtk.Box):
         webview.add_css_class("message-html")
         webview.load_html(self._sandboxed_html(), None)
         self._webview = webview
-        self._body.append(webview)
+
+        # A frame with the UI's rounded corners, clipping the page to them.
+        frame = Gtk.Overlay(overflow=Gtk.Overflow.HIDDEN)
+        frame.add_css_class("message-body-frame")
+        frame.set_child(webview)
+        self._theme_button = Gtk.Button(
+            halign=Gtk.Align.END, valign=Gtk.Align.START, margin_top=6, margin_end=6
+        )
+        self._theme_button.add_css_class("osd")
+        self._theme_button.add_css_class("circular")
+        self._theme_button.connect("clicked", self._on_theme_clicked)
+        frame.add_overlay(self._theme_button)
+        self._body.append(frame)
+        self._update_theme_button()
+        self._dark_handler = self._style_manager.connect(
+            "notify::dark", self._on_style_changed
+        )
+
+    def _is_dark(self) -> bool:
+        if self._is_dark_override is not None:
+            return self._is_dark_override
+        return self._style_manager.get_dark()
 
     def _sandboxed_html(self) -> str:
         return message_parser.sandbox_html(
             self._html or "",
             are_remote_images_allowed=self._should_load_remote_images,
+            is_dark=self._is_dark(),
         )
+
+    def _update_theme_button(self) -> None:
+        if self._theme_button is None:
+            return
+        is_dark = self._is_dark()
+        self._theme_button.set_icon_name(
+            "weather-clear-symbolic" if is_dark else "weather-clear-night-symbolic"
+        )
+        self._theme_button.set_tooltip_text(
+            _("Show on Light Background") if is_dark else _("Show on Dark Background")
+        )
+
+    # Only for this message, and only until it is closed: a newsletter that
+    # sets its own dark text reads badly on a dark page.
+    def _on_theme_clicked(self, _button: Gtk.Button) -> None:
+        self._is_dark_override = not self._is_dark()
+        self._reload_body()
+
+    def _on_style_changed(self, *_args: object) -> None:
+        if self._is_dark_override is None:
+            self._reload_body()
+
+    def _reload_body(self) -> None:
+        if self._webview is None or self._html is None:
+            return
+        self._update_theme_button()
+        self._webview.load_html(self._sandboxed_html(), None)
+
+    def _on_load_changed(
+        self, webview: WebKit.WebView, event: WebKit.LoadEvent
+    ) -> None:
+        if event != WebKit.LoadEvent.FINISHED:
+            return
+        self._measure(webview)
+        for delay in REMEASURE_MS:
+            GLib.timeout_add(delay, self._measure_later, webview)
+
+    def _measure_later(self, webview: WebKit.WebView) -> bool:
+        if webview is self._webview:
+            self._measure(webview)
+        return False
+
+    def _measure(self, webview: WebKit.WebView) -> None:
+        webview.evaluate_javascript(
+            MEASURE_SCRIPT, -1, MEASURE_WORLD, None, None, self._on_measured, None
+        )
+
+    def _on_measured(
+        self, webview: WebKit.WebView, result: Gio.AsyncResult, _data: object
+    ) -> None:
+        try:
+            value = webview.evaluate_javascript_finish(result)
+        except GLib.Error:
+            logger.debug("could not measure a message body", exc_info=True)
+            return
+        if webview is not self._webview:
+            return
+        height = int(value.to_double()) if value is not None else 0
+        webview.set_size_request(-1, max(BODY_MIN_HEIGHT, height))
 
     # The webview only ever renders the message body: the one navigation it may
     # perform is the load_html document itself. A click goes to the browser, and
@@ -538,7 +639,11 @@ class MessageView(Gtk.Box):
         memory until the cyclic collector came round.
         """
         self._is_released = True
+        if self._dark_handler:
+            self._style_manager.disconnect(self._dark_handler)
+            self._dark_handler = 0
         if self._webview is not None:
+            self._webview.disconnect_by_func(self._on_load_changed)
             self._webview.disconnect_by_func(self._on_decide_policy)
             self._webview.unparent()
             self._webview = None

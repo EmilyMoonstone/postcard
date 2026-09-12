@@ -142,10 +142,27 @@ _CSP = "default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src d
 _CSP_WITH_IMAGES = _CSP + " https: http:"
 
 
-def sandbox_html(html: str, *, are_remote_images_allowed: bool) -> str:
+# The reader's own colours, so a message sits in the UI instead of on a white
+# sheet. Only defaults: a message that sets its own colours keeps them, which is
+# what the light/dark switch above each body is for.
+_DARK_STYLE = (
+    ":root{color-scheme:dark}html{background:#1e1e1e;color:#ffffffde}a{color:#78aeed}"
+)
+_LIGHT_STYLE = (
+    ":root{color-scheme:light}html{background:#ffffff;color:#000000cc}a{color:#1c71d8}"
+)
+# Everyone's defaults: no margin doubling up on the frame's, and images that
+# don't push the body wider than the reader.
+_BASE_STYLE = "body{margin:12px;overflow-wrap:anywhere}img{max-width:100%;height:auto}"
+
+
+def sandbox_html(
+    html: str, *, are_remote_images_allowed: bool, is_dark: bool = False
+) -> str:
     """Wrap a message body in a document whose CSP blocks remote subresources."""
     policy = _CSP_WITH_IMAGES if are_remote_images_allowed else _CSP
+    style = _BASE_STYLE + (_DARK_STYLE if is_dark else _LIGHT_STYLE)
     return (
         '<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" '
-        f'content="{policy}"></head><body>{html}</body></html>'
+        f'content="{policy}"><style>{style}</style></head><body>{html}</body></html>'
     )
